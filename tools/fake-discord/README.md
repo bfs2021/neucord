@@ -83,6 +83,9 @@ what arrived, IDENTIFY's key order and properties first.
   with it), and ends commands by Backspace, a reply and a channel switch;
   `thread` (with `FAKE_OWNER=1`) runs /thread; `dice` (with
   `FAKE_VARIANTS=dice=1`) rolls by /roll-dice and by its message's link;
+  `bot-commands` (with `FAKE_NSFW=dms=1`, which puts settings proto 1 in
+  READY) lists a bot's commands after its mention, and turns them off and
+  on from the message box's menu;
   `reopen` and `lazy` relaunch on the same data
   (`ACCOUNT=<name>` keeps it between runs).
 
