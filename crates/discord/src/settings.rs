@@ -772,6 +772,9 @@ pub struct Settings {
     pub nsfw_commands_in_dms: bool,
     /// `enable_tts_command`, as the account set it; see [`Self::tts_command`].
     pub enable_tts_command: Option<bool>,
+    /// `show_command_suggestions`, as the account set it; see
+    /// [`Self::command_suggestions`].
+    pub show_command_suggestions: Option<bool>,
 }
 
 /// The settings a payload mentions; the rest are `None`.
@@ -791,6 +794,7 @@ pub struct SettingsPatch {
     pub skin_tone: Option<Option<Tone>>,
     pub nsfw_commands_in_dms: Option<bool>,
     pub enable_tts_command: Option<bool>,
+    pub show_command_suggestions: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -834,6 +838,9 @@ impl Settings {
         if patch.enable_tts_command.is_some() {
             self.enable_tts_command = patch.enable_tts_command;
         }
+        if patch.show_command_suggestions.is_some() {
+            self.show_command_suggestions = patch.show_command_suggestions;
+        }
     }
 
     /// Take `patch` as all of the settings, as a replacing protobuf is: what
@@ -846,6 +853,12 @@ impl Settings {
     /// /tts is offered (253932's `on`): unless the account turned it off.
     pub fn tts_command(&self) -> bool {
         self.enable_tts_command.unwrap_or(true)
+    }
+
+    /// A message starting with a bot's mention lists that bot's commands
+    /// (253932's `showCommandSuggestions`): unless the account turned it off.
+    pub fn command_suggestions(&self) -> bool {
+        self.show_command_suggestions.unwrap_or(true)
     }
 
     /// Our status is Do Not Disturb, which silences every notification.

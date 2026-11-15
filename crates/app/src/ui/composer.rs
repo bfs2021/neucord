@@ -23,6 +23,28 @@ use super::state::{now_ms, now_unix};
 use super::uploads::{Outgoing, Stopped};
 use crate::config;
 
+/// The message box's menu: its Suggestions submenu (194400's
+/// `suggestions`), which shows while it has something in it.
+pub(super) const SUGGESTIONS: Entry<()> = Entry::Item(Item {
+    name: "suggestions",
+    label: "S_uggestions",
+    shows: |_, _| true,
+    kind: Kind::Submenu(&[&[COMMAND_SUGGESTIONS]]),
+});
+
+/// Its Slash Commands (`command-suggestions`): whether a message starting
+/// with a bot's mention lists the bot's commands, a setting of the
+/// account's. The client's edit box takes no commands, and has none.
+const COMMAND_SUGGESTIONS: Entry<()> = Entry::Item(Item {
+    name: "command-suggestions",
+    label: "Slash _Commands",
+    shows: |app, _| app.editing().is_none(),
+    kind: Kind::Check {
+        checked: |app, _| app.account.state.borrow().settings.command_suggestions(),
+        set: |app, _, on| app.change_setting(discord::Setting::ShowCommandSuggestions(on)),
+    },
+});
+
 /// The message box's menu: whether the send button shows (194400's
 /// `submit-button`). The client's edit box has none.
 pub(super) const SEND_BUTTON: Entry<()> = Entry::Item(Item {
@@ -183,6 +205,9 @@ pub(super) struct MentionCtx {
     pub(super) icons: Vec<(usize, &'static str)>,
     /// The pill of the command in the box a pick sets whole.
     pub(super) pill: Option<String>,
+    /// When a row is selected by itself: [`Focus::Manual`] lists start with
+    /// none, and Enter then sends the message.
+    pub(super) focus: discord::commands::Focus,
 }
 
 impl MentionCtx {
@@ -356,9 +381,12 @@ impl App {
                     return glib::Propagation::Stop;
                 }
                 Key::Return | Key::KP_Enter => {
-                    let index = self.mention_list.selected_row().map(|r| r.index()).unwrap_or(0);
-                    self.accept_mention(index);
-                    return glib::Propagation::Stop;
+                    let selected = self.mention_list.selected_row().map(|r| r.index());
+                    let manual = self.mention.borrow().focus == discord::commands::Focus::Manual;
+                    if selected.is_some() || !manual {
+                        self.accept_mention(selected.unwrap_or(0));
+                        return glib::Propagation::Stop;
+                    }
                 }
                 _ => {}
             }
@@ -730,6 +758,7 @@ impl App {
         };
         match found {
             Some((start, candidates)) => self.show_completions(start, candidates),
+            None if self.bot_command_popup(true) => {}
             None => self.mention_popover.popdown(),
         }
     }
@@ -835,8 +864,12 @@ impl App {
         if count == 0 {
             return;
         }
-        let current = self.mention_list.selected_row().map(|r| r.index()).unwrap_or(0);
-        let next = (current + delta).rem_euclid(count);
+        // With none selected, Down takes the first and Up the last.
+        let next = match self.mention_list.selected_row() {
+            Some(row) => (row.index() + delta).rem_euclid(count),
+            None if delta > 0 => 0,
+            None => count - 1,
+        };
         self.select_row(Some(next as usize));
     }
 

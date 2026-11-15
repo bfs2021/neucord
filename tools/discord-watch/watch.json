@@ -446,6 +446,7 @@
     "autocomplete utils": ["AutocompleteUtils"],
     "autocomplete keys": ["onTabOrEnter", "getSpaceSelectIndex"],
     "autocomplete popup": ["channel-autocomplete", "optionText"],
+    "autocomplete lists": ["cleanedQuery"],
     "member search": ["getGuildNameSuggestion", "maxAge"],
     "command run": ["executeCommand.stageAttachments"],
     "command file types": ["showInvalidFileTypeAlert", "mediaFilesAllowed"],

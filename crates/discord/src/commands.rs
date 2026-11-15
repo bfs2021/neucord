@@ -949,6 +949,9 @@ pub enum Focus {
     Auto,
     /// Once something is typed (`AUTO_WHEN_FILTERED`): the options list.
     WhenFiltered,
+    /// Never (`MANUAL`): a bot's commands after its mention, which Tab or
+    /// the arrows choose from, and Enter leaves to the box.
+    Manual,
 }
 
 /// What Enter or Tab does with the popup.
@@ -985,7 +988,7 @@ impl Selection {
         let shows = loading || count > 0;
         let key = (list.to_owned(), query.to_owned(), loading, shows);
         if self.last.as_ref() != Some(&key) {
-            let allowed = focus == Focus::Auto || !query.is_empty();
+            let allowed = focus == Focus::Auto || (focus == Focus::WhenFiltered && !query.is_empty());
             self.index = (shows && allowed && count > 0).then_some(0);
             self.last = Some(key);
         } else if let Some(index) = self.index {
@@ -1024,7 +1027,7 @@ impl Selection {
         match self.index {
             Some(i) if i < count => Some(if enter { Pick::Send(i) } else { Pick::Insert(i) }),
             Some(_) => None,
-            None if !enter && self.focus == Focus::WhenFiltered && count > 0 => {
+            None if !enter && self.focus != Focus::Auto && count > 0 => {
                 self.index = Some(0);
                 Some(Pick::Selected)
             }
@@ -1090,6 +1093,43 @@ pub fn suggestions<'a>(
     let mut found = settled(found, &query, terminated);
     found.truncate(SUGGESTIONS);
     found
+}
+
+/// The user a message starts with a mention of, and what follows it,
+/// trimmed (`e1` in 496533). Whether they are a bot is the caller's to say.
+pub fn mentioned_first(text: &str) -> Option<(Snowflake, &str)> {
+    let rest = text.strip_prefix("<@")?;
+    let rest = rest.strip_prefix('!').unwrap_or(rest);
+    let (id, after) = rest.split_once('>')?;
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((Snowflake(id.parse().ok()?), after.trim()))
+}
+
+/// What a message starting with a mention of `bot` lists, `query` being
+/// the text after it (`LEGACY_COMMANDS` in 496533): everything the `/`
+/// list could, whatever a reply allows, cut to the first [`SUGGESTIONS`]
+/// before only `bot`'s app is kept, as the client cuts its query; once the
+/// name is ended, the ones its English name starts.
+pub fn bot_suggestions<'a>(
+    index: &'a CommandIndex,
+    place: &Place,
+    bot: Snowflake,
+    query: &str,
+    builtins: &'a [Command],
+    used: &Used,
+) -> Vec<Found<'a>> {
+    let (text, terminated) = query_of(query);
+    let asked = Query { kind: command_type::CHAT, text: &text, offer: Offer::ALL, builtins, used: Some(used) };
+    let (named, spaced) = (text.trim(), format!("{} ", text.trim()));
+    index
+        .query(place, asked)
+        .into_iter()
+        .take(SUGGESTIONS)
+        .filter(|f| f.app.bot == Some(bot))
+        .filter(|f| !terminated || f.command.name == named || f.command.name.starts_with(&spaced))
+        .collect()
 }
 
 /// A section of what a bare `/` lists.
@@ -3350,6 +3390,11 @@ mod tests {
         assert_eq!(selection.selected(), Some(0));
         selection.listed("options", Focus::WhenFiltered, "c", false, 2);
         assert_eq!(selection.selected(), Some(0));
+        // A bot's commands wait for Tab or the arrows, typed or not.
+        selection.listed("bot", Focus::Manual, "ro", false, 2);
+        assert_eq!(selection.selected(), None);
+        assert_eq!(selection.key(true, 2), None, "Enter is the box's");
+        assert_eq!(selection.key(false, 2), Some(Pick::Selected), "Tab selects the first");
     }
 
     #[test]
@@ -3732,6 +3777,34 @@ mod tests {
             assert!(found.iter().all(|f| f.score == 5 && f.app.name == "Built-In"));
             let inside = commands.query(&place(), query("in"));
             assert!(inside.iter().filter(|f| f.command.is_built_in()).all(|f| f.score <= 6));
+        }
+
+        #[test]
+        fn a_bots_mention_lists_its_commands() {
+            let commands = loaded(&index());
+            let builtins = all();
+            let dicey = Snowflake(300_000_000_000_000_001);
+            let names = |bot, query| -> Vec<String> {
+                bot_suggestions(&commands, &place(), bot, query, &builtins, &Used::default())
+                    .iter()
+                    .map(|f| f.command.name.clone())
+                    .collect()
+            };
+            // "ro" finds the app ("rolls dice") too, so all its commands, its best match first.
+            assert_eq!(names(dicey, "ro"), ["roll", "stats reset all", "stats show"], "not /roll-dice");
+            assert_eq!(names(dicey, "stats "), ["stats reset all", "stats show"], "the name ended");
+            assert_eq!(names(Snowflake(300_000_000_000_000_002), "ro"), [""; 0], "Zed has no chat commands");
+        }
+
+        #[test]
+        fn a_message_starting_with_a_mention_names_its_user() {
+            assert_eq!(mentioned_first("<@31> ro "), Some((Snowflake(31), "ro")));
+            assert_eq!(mentioned_first("<@!31>stats"), Some((Snowflake(31), "stats")), "a nickname's");
+            assert_eq!(mentioned_first("<@31>"), Some((Snowflake(31), "")));
+            assert_eq!(mentioned_first(" <@31> ro"), None, "only at the very start");
+            assert_eq!(mentioned_first("<@&31> ro"), None, "a role's");
+            assert_eq!(mentioned_first("<@> ro"), None);
+            assert_eq!(mentioned_first("hi <@31>"), None);
         }
 
         #[test]
