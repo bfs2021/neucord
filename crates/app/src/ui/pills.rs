@@ -1092,6 +1092,7 @@ impl App {
             headers: listing.headers,
             icons: Vec::new(),
             pill: listing.pill,
+            focus: listing.focus,
         };
         self.show_listed(ctx, selected);
     }

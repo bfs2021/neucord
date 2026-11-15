@@ -37,6 +37,7 @@ const STREAM_NOTIFICATIONS_ENABLED: u32 = 7;
 
 // TextAndImagesSettings.
 const DIVERSITY_SURROGATE: u32 = 1;
+const SHOW_COMMAND_SUGGESTIONS: u32 = 8;
 const INLINE_ATTACHMENT_MEDIA: u32 = 9;
 const INLINE_EMBED_MEDIA: u32 = 10;
 const GIF_AUTO_PLAY: u32 = 11;
@@ -173,6 +174,7 @@ impl SettingsPatch {
             skin_tone: text.as_ref().and_then(|t| t.string_value(DIVERSITY_SURROGATE)).map(Tone::from_modifier),
             nsfw_commands_in_dms: flag(VIEW_NSFW_COMMANDS),
             enable_tts_command: flag(ENABLE_TTS_COMMAND),
+            show_command_suggestions: flag(SHOW_COMMAND_SUGGESTIONS),
         })
     }
 }
@@ -268,6 +270,8 @@ pub enum Setting {
     RenderReactions(bool),
     GifAutoPlay(bool),
     AnimateEmoji(bool),
+    /// The message box menu's Suggestions ▸ Slash Commands (194400).
+    ShowCommandSuggestions(bool),
     AnimateStickers(StickerAnimation),
     DeveloperMode(bool),
     ReactionNotifications(ReactionNotifications),
@@ -346,6 +350,7 @@ impl Setting {
             Setting::InlineAttachmentMedia(on) => one(TEXT_AND_IMAGES, INLINE_ATTACHMENT_MEDIA, Some(bool_value(on))),
             Setting::RenderReactions(on) => one(TEXT_AND_IMAGES, RENDER_REACTIONS, Some(bool_value(on))),
             Setting::GifAutoPlay(on) => one(TEXT_AND_IMAGES, GIF_AUTO_PLAY, Some(bool_value(on))),
+            Setting::ShowCommandSuggestions(on) => one(TEXT_AND_IMAGES, SHOW_COMMAND_SUGGESTIONS, Some(bool_value(on))),
             Setting::AnimateEmoji(on) => one(TEXT_AND_IMAGES, ANIMATE_EMOJI, Some(bool_value(on))),
             Setting::AnimateStickers(how) => one(TEXT_AND_IMAGES, ANIMATE_STICKERS, Some(uint_value(how.raw() as u32))),
             Setting::DeveloperMode(on) => one(APPEARANCE, DEVELOPER_MODE, plain(on)),
@@ -554,6 +559,22 @@ mod tests {
         );
     }
 
+    /// A `BoolValue` too, on when left out (`showCommandSuggestions` in
+    /// 253932).
+    #[test]
+    fn reads_the_command_suggestions_setting() {
+        let off = patch(&bytes_field(TEXT_AND_IMAGES, &bool_wrapper(SHOW_COMMAND_SUGGESTIONS, false)));
+        assert_eq!(off.show_command_suggestions, Some(false));
+        let mut settings = crate::settings::Settings::default();
+        assert!(settings.command_suggestions(), "on by default");
+        settings.replace(off);
+        assert!(!settings.command_suggestions());
+        settings.replace(patch(&bytes_field(TEXT_AND_IMAGES, &[])));
+        assert!(settings.command_suggestions(), "absent is on");
+        let (group, written) = Setting::ShowCommandSuggestions(false).written(&[]).unwrap();
+        assert_eq!((group, written), (TEXT_AND_IMAGES, bool_wrapper(SHOW_COMMAND_SUGGESTIONS, false)));
+    }
+
     /// Developer Mode is a plain `bool`, not a wrapper: proto3 leaves `false`
     /// out, so appearance without it is how another client turns it off.
     #[test]
@@ -670,6 +691,7 @@ mod tests {
             GifAutoPlay(false),
             AnimateEmoji(false),
             AnimateStickers(StickerAnimation::Never),
+            ShowCommandSuggestions(false),
             DeveloperMode(true),
             ReactionNotifications(self::ReactionNotifications::OnlyDms),
             FriendOnlineNotifications(false),
@@ -749,6 +771,7 @@ mod tests {
                 },
                 locale: Some("fr".into()),
                 skin_tone: Some(Tone::MediumDark),
+                show_command_suggestions: Some(false),
                 ..Settings::default()
             }
         );

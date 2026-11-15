@@ -570,6 +570,71 @@ impl App {
         true
     }
 
+    /// The commands of a bot the box's text starts with a mention of, once
+    /// something follows it (`LEGACY_COMMANDS` in 496533), unless the
+    /// account turned them off (Suggestions ▸ Slash Commands). None is
+    /// selected until Tab or the arrows choose one, and a pick puts the
+    /// command in the box as the `/` list's does. Whether it shows them.
+    pub(super) fn bot_command_popup(self: &Rc<Self>, fetch: bool) -> bool {
+        let buffer = self.composer.buffer();
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_lowercase();
+        if self.editing().is_some() || self.slash.is_active() {
+            return false;
+        }
+        let Some((bot, query)) = commands::mentioned_first(&text) else { return false };
+        let (channel, place) = {
+            let state = self.account.state.borrow();
+            let is_bot = state.whole_users.get(&bot.0).is_some_and(|u| u.bot);
+            if query.is_empty() || !is_bot || !state.settings.command_suggestions() {
+                return false;
+            }
+            let Some(channel) = state.channel else { return false };
+            let Some(place) = state.command_place(channel) else { return false };
+            (channel, place)
+        };
+        let again = || {
+            let this = Rc::downgrade(self);
+            Rc::new(move || {
+                // What came may leave nothing of this list to show.
+                if let Some(this) = this.upgrade()
+                    && !this.bot_command_popup(false)
+                    && this.mention.borrow().focus == commands::Focus::Manual
+                {
+                    this.mention_popover.popdown();
+                }
+            })
+        };
+        if fetch {
+            self.fetch_command_indexes(&place, commands::Offer::ALL, query, again());
+        }
+        if commands::loads_use(&self.account.state.borrow().commands, &place, query, commands::Offer::ALL) {
+            let again = again();
+            self.load_frecency(move || again());
+        }
+        let used = self.command_use();
+        let builtins = self.builtin_commands(channel, commands::BuiltIns::All);
+        let candidates: Vec<Completion> = {
+            let state = self.account.state.borrow();
+            commands::bot_suggestions(&state.commands, &place, bot, query, &builtins, &used)
+                .iter()
+                .map(|f| {
+                    Completion::Command(Suggestion {
+                        id: f.command.id.clone(),
+                        name: format!("/{}", f.command.display_name),
+                        description: f.command.display_description.clone(),
+                        app: f.app.name.clone(),
+                    })
+                })
+                .collect()
+        };
+        if candidates.is_empty() {
+            return false;
+        }
+        let focus = commands::Focus::Manual;
+        self.show_listed(MentionCtx { candidates, focus, ..MentionCtx::default() }, None);
+        true
+    }
+
     /// The built-ins offered in `channel` now, as `offer` lists them (`F`
     /// in 12115 and each one's predicate), made again each time since they
     /// follow our permissions, the TTS setting and the message limit.

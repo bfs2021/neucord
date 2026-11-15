@@ -327,11 +327,10 @@ pub(super) const LAUNCHER_APP: Table<launcher::AppTarget> = &[&[launcher::COPY_A
 /// select all and emoji, which stand for the browser's menu the web client
 /// leaves there). These are the desktop client's items (`textarea-context`,
 /// 194400) Neucord has, in its order, as the message menu has the desktop's
-/// Copy Link. Left out: Suggestions ▸ Slash Commands, which only toggles a
-/// mentioned bot's command suggestions (`e2` in 496533) Neucord doesn't
-/// make; Remove from Dictionary, which libspelling has no word for; and the
-/// staff-only Fix Grammar, Translate and Transforms.
-pub(super) const COMPOSER: Table<()> = &[&[composer::SEND_BUTTON], &[spelling::SPELLING], &[uploads::PASTE_PLAIN]];
+/// Copy Link. Left out: Remove from Dictionary, which libspelling has no
+/// word for, and the staff-only Fix Grammar, Translate and Transforms.
+pub(super) const COMPOSER: Table<()> =
+    &[&[composer::SUGGESTIONS, composer::SEND_BUTTON], &[spelling::SPELLING], &[uploads::PASTE_PLAIN]];
 
 /// The bar above a command in the message box (`dev-context`, 646938):
 /// Copy Command ID, in Developer Mode.
@@ -881,9 +880,9 @@ mod tests {
 
     #[test]
     fn the_message_box_menu_follows_the_desktop_clients_order() {
-        // Send Message Button, the spelling groups, then Paste as Plain Text
-        // (items 2, 3–4 and 5 of 194400).
-        assert_eq!(names(COMPOSER), [["send-button"], ["spelling"], ["paste-plain-text"]]);
+        // Suggestions and Send Message Button, the spelling groups, then
+        // Paste as Plain Text (items 1–2, 3–4 and 5 of 194400).
+        assert_eq!(names(COMPOSER), [&["suggestions", "send-button"][..], &["spelling"], &["paste-plain-text"]]);
         assert_eq!(names(COMMAND_BAR), [["copy-command-id"]]);
     }
 
