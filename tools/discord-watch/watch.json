@@ -359,6 +359,7 @@
     "AccessibilityStore",
     "ActiveJoinedThreadsStore",
     "ActiveThreadsStore",
+    "ApexExperimentStore",
     "AppLauncherStore",
     "ApplicationCommandAutocompleteStore",
     "ApplicationCommandFrecencyStore",
