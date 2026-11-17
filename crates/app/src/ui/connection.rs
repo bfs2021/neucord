@@ -255,6 +255,9 @@ impl App {
                         self.members_found();
                     }
                 }
+                Event::MembersChecked { guild_id, nonce, found, not_found } => {
+                    self.members_checked(guild_id, &nonce, &found, &not_found)
+                }
                 Event::MemberList(update) => self.on_member_list(*update),
                 Event::GuildUpdate(update) => {
                     let id = update.id;
@@ -423,6 +426,8 @@ impl App {
                     self.account.timelines.borrow_mut().held.resumed();
                     self.account.state.borrow_mut().members.resumed();
                     self.send_member_requests();
+                    self.account.state.borrow_mut().member_check.resumed(std::time::Instant::now());
+                    self.wake_member_check();
                     self.subscribe_session(false);
                     self.resend_presence();
                     let name = {
@@ -532,6 +537,7 @@ impl App {
             state.fetched_threads.clear();
             // A new session: what we asked for before is forgotten, as in the client.
             state.members = members;
+            state.member_check.connected(std::time::Instant::now());
             state.private_channels = private_channels;
             state.relationships = relationships;
             state.notes.clear();
@@ -563,6 +569,7 @@ impl App {
             state.me = Some(user.clone());
             ((store.flatten(), migrated), was_ready, offline_save)
         };
+        self.wake_member_check();
         {
             let state = self.account.state.borrow();
             super::identity::ready(user.id, &state.experiments);

@@ -32,7 +32,9 @@ what arrived, IDENTIFY's key order and properties first.
   channel joins the server and comes back as `THREAD_CREATE`. `FAKE_VARIANTS="hiding=1,voice=1,ladder=1,lazy=1,upload=1,nsfwlevel=1,chatbar=1,dice=1"`
   assigns Apex experiments by name, `FAKE_REIDENTIFY=<s>` sends op 9 after
   that many seconds to force a second IDENTIFY, `FAKE_NEW_TOKEN` puts an
-  `auth_token` in READY. `FAKE_NSFW="allowed=1,dms=0,status=3,gated=0,level=0,owner=0"`
+  `auth_token` in READY, `FAKE_LEFT=<user ids>` has those people leave the
+  server: op 8 with a `nonce` answers them `not_found`, and a search finds
+  them no more. `FAKE_NSFW="allowed=1,dms=0,status=3,gated=0,level=0,owner=0"`
   (the defaults) sets the account's `nsfw_allowed` and age status, the
   age-restricted commands in DMs setting, the region's age-gated features
   and the server's content levels; channel 604 is `nsfw`.
@@ -85,7 +87,8 @@ what arrived, IDENTIFY's key order and properties first.
   `FAKE_VARIANTS=dice=1`) rolls by /roll-dice and by its message's link;
   `bot-commands` (with `FAKE_NSFW=dms=1`, which puts settings proto 1 in
   READY) lists a bot's commands after its mention, and turns them off and
-  on from the message box's menu;
+  on from the message box's menu; `member-check` (with `FAKE_LEFT=302`)
+  lists Bob in a pill, whose check then drops him;
   `reopen` and `lazy` relaunch on the same data
   (`ACCOUNT=<name>` keeps it between runs).
 

@@ -72,9 +72,23 @@ pub struct Member {
     pub avatar: Option<String>,
     pub roles: Vec<Snowflake>,
     pub presence: Presence,
+    /// In seconds, rounded up (see [`crate::model::Member`]).
+    pub joined_at: Option<i64>,
+    pub flags: u64,
 }
 
 impl Member {
+    /// What the chat keeps of them (see [`crate::members::Known`]).
+    pub fn known(&self) -> crate::members::Known {
+        crate::members::Known {
+            roles: self.roles.clone(),
+            nick: self.nick.clone(),
+            avatar: self.avatar.clone(),
+            joined_at: self.joined_at,
+            guest: self.flags & crate::members::IS_GUEST != 0,
+        }
+    }
+
     /// The name the list shows: the nickname, else the user's own.
     pub fn name(&self) -> &str {
         self.nick.as_deref().filter(|n| !n.is_empty()).unwrap_or_else(|| self.user.display_name())
@@ -84,7 +98,7 @@ impl Member {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Group(Group),
-    Member(Member),
+    Member(Box<Member>),
 }
 
 impl Item {
@@ -95,7 +109,8 @@ impl Item {
         }
         let member = value["member"].as_object().filter(|_| value["member"]["user"].is_object())?;
         let roles = member.get("roles").and_then(Value::as_array).into_iter().flatten();
-        Some(Item::Member(Member {
+        let parsed = crate::model::Member::from_value(&value["member"]);
+        Some(Item::Member(Box::new(Member {
             user: User::deserialize(&value["member"]["user"]).ok()?,
             nick: member.get("nick").and_then(Value::as_str).map(str::to_owned),
             avatar: member.get("avatar").and_then(Value::as_str).map(str::to_owned),
@@ -104,7 +119,9 @@ impl Item {
                 presence @ Value::Object(_) => Presence::from_value(presence),
                 _ => Presence::default(),
             },
-        }))
+            joined_at: parsed.joined_at,
+            flags: parsed.flags,
+        })))
     }
 }
 
@@ -200,7 +217,7 @@ impl Update {
                 Op::Invalidate { .. } | Op::Delete { .. } => Vec::new(),
             };
             members.extend(items.into_iter().filter_map(|item| match item {
-                Item::Member(member) => Some(member),
+                Item::Member(member) => Some(&**member),
                 Item::Group(_) => None,
             }));
         }
@@ -452,13 +469,15 @@ mod tests {
     const G: Snowflake = Snowflake(1);
 
     fn member(id: u64, name: &str) -> Item {
-        Item::Member(Member {
+        Item::Member(Box::new(Member {
             user: serde_json::from_value(json!({"id": id.to_string(), "username": name})).unwrap(),
             nick: None,
             avatar: None,
             roles: Vec::new(),
             presence: Presence::default(),
-        })
+            joined_at: None,
+            flags: 0,
+        }))
     }
 
     fn group(id: &str, count: u32) -> Group {

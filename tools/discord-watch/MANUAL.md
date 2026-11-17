@@ -213,6 +213,16 @@ changed for unrelated reasons only needs a note in the issue.
   (`requestGuildMembers`). Splitting into 100 users a request and sending
   nothing before the session is established are in the `GUILD_MEMBERS_REQUEST`
   handler of 225123.
+- **Checking the members the `@` suggestions list** (`member_check.rs`,
+  `ui/member_check.rs`, `Gateway::check_members`). The suggestions in
+  152210 hand who they list to 462446, which waits 500 ms for the list to
+  settle, then to `m` in 579974: each held member that isn't us or a guest,
+  at most once every 5 minutes and again once those run out, goes 500 ms
+  after the first, 100 to an op 8 with a `gmv:` nonce
+  (`requestMembersByIdWithNonce` in 778858). A `not_found` member still
+  held as asked is removed; 30 s unanswered asks again, three times at
+  most, behind 158390's backoff; `CONNECTION_OPEN` asks again for all
+  that waits.
 - **Member lists** (`subscriptions.rs`, `member_list.rs`, `ui/members.rs`).
   What is subscribed to and when (`GuildSubscriptionsStore`,
   `updateGuildSubscriptions`), how rows apply and which list a channel shows

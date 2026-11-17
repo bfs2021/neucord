@@ -27,6 +27,7 @@ mod integrations;
 mod launcher;
 mod login;
 mod media_frame;
+mod member_check;
 mod members;
 mod menus;
 mod message_row;
