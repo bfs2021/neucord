@@ -385,7 +385,7 @@ impl Stores {
     }
 
     /// Whether a use other than a server or channel opened waits: those
-    /// alone don't make the first save load the settings (`R`, 416380).
+    /// alone don't make the first save load the settings (`L`, 416380).
     pub fn has_pending_beyond_channels(&self) -> bool {
         self.emoji.has_pending()
             || self.reactions.has_pending()

@@ -1,5 +1,5 @@
 //! Our own status and custom status: shown in the account panel, set from
-//! its menu as the official client's account popout does (998034 and the
+//! its menu as the official client's account popout does (166783 and the
 //! status picker, 827827; the custom status dialog, 431273), and kept in
 //! step with what Discord shows others (see [`discord::presence`]).
 //!
@@ -20,8 +20,8 @@ use gtk::{gio, glib};
 use super::App;
 use super::state::now_ms;
 
-/// How long the status picker offers a status for, `None` for ever (`it`,
-/// 998034).
+/// How long the status picker offers a status for, `None` for ever (`id`,
+/// 166783).
 const DURATIONS: [(&str, Option<u64>); 6] = [
     ("For 15 Minutes", Some(15 * 60_000)),
     ("For 1 Hour", Some(60 * 60_000)),

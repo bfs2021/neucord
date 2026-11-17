@@ -304,7 +304,7 @@ pub fn in_channel(guild: &Guild, channel: &Channel, me: &Account, now: i64) -> P
     compute(guild, &channel.permission_overwrites, me, now)
 }
 
-/// Ours in `thread`, given ours in its parent (the client's thread rule, `x`
+/// Ours in `thread`, given ours in its parent (the client's thread rule, `F`
 /// in 488926). A media thread only takes reading. A private thread we
 /// haven't joined gives nothing without Manage Threads, unless we're a
 /// guest. Otherwise the parent's permissions apply, with Send Messages
@@ -418,7 +418,7 @@ pub fn hidden_from_everyone(guild: &Guild, channel: &Channel) -> bool {
 /// servers, and in one where we can see it with Send Messages. The client
 /// asks only for the latter, but never opens a channel we can't see. Never
 /// a forum or media channel: Send Messages there starts posts, which are
-/// threads, and the client shows them no message box (289287).
+/// threads, and the client shows them no message box (420018).
 pub fn can_send(guild: Option<&Guild>, channel: &Channel, me: &Account, now: i64) -> bool {
     match guild {
         None => !channel.is_system_dm(),
@@ -584,7 +584,7 @@ pub fn can_delete(guild: Option<&Guild>, channel: &Channel, message: &Message, m
 }
 
 /// What the client offers of reactions in a channel (`A` in 707985, with
-/// what `cO` in 679636 feeds it).
+/// what `cw` in 190854 feeds it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reacting {
     /// Add one with an emoji nobody has used on the message: the add button,

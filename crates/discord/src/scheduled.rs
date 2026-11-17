@@ -3,7 +3,7 @@
 //! 566908 (anchor: the `Scheduled Messages` logger), its requests in 151282
 //! and 138399's `_sendMessage`, and the list in the inbox's tab in 713024.
 //!
-//! In build 668923 the feature is on for every account. The limit on how
+//! In build 673919 the feature is on for every account. The limit on how
 //! many may wait at once is [`crate::limits::Limits::scheduled_messages`].
 
 use serde_json::Value;

@@ -1,5 +1,5 @@
 //! A command's file options: the boxes that take the place of the message's
-//! files above the box while a command is in it (102077 `L`), the file each
+//! files above the box while a command is in it (102077 `M`), the file each
 //! option holds (the client's `SlashCommand` uploads, 522602), and running
 //! a command that has files (`B` in 545152, whose staging only waits on
 //! uploads started as each file was picked).

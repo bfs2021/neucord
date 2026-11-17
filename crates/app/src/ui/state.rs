@@ -639,7 +639,7 @@ impl State {
     }
 
     /// Whose member list the open channel has, as the client chooses
-    /// (`renderSidebar`, 289287): a server's text, announcement, forum and
+    /// (`renderSidebar`, 420018): a server's text, announcement, forum and
     /// media channels, and an announcement thread's parent, which show the
     /// server's members; and a group DM. Other threads show those in them,
     /// which Neucord doesn't list yet.

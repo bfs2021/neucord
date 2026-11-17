@@ -1,4 +1,4 @@
-//! Which buttons the message box's bar shows (`em` in 4025,
+//! Which buttons the message box's bar shows (`eA` in 290153,
 //! `ChannelTextAreaButtons`), and the character count beside them. The
 //! device's choice of apps, emoji, GIF and sticker buttons only counts for
 //! accounts in `2026-06-chat-bar-customization` (951260); everyone else gets
@@ -9,12 +9,12 @@ use crate::experiments::Experiments;
 
 /// The bar follows the device's button choices: variant 1 of the Apex user
 /// experiment (its `enabled`), which also shows their switches (`tP` in
-/// 960111).
+/// 212909).
 pub fn customizable(experiments: &Experiments, me: Snowflake) -> bool {
     experiments.apex_user(me, "2026-06-chat-bar-customization").is_some_and(|a| a.variant == 1)
 }
 
-/// A server announcement channel gets the announcement composer (`e1` in
+/// A server announcement channel gets the announcement composer (`e2` in
 /// 699344, variant 1), whose box takes no commands
 /// (`CREATE_ANNOUNCEMENT_POST` in 355622).
 pub fn announcement_composer(experiments: &Experiments, me: Snowflake) -> bool {
@@ -31,14 +31,14 @@ pub fn attach_launcher(customizable: bool, prefs: Prefs) -> bool {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Bar {
     /// The box shows: the channel takes our messages. Where it doesn't, the
-    /// client's buttons draw nothing (`disabled`, `nS` in 989161) and
+    /// client's buttons draw nothing (`disabled`, `nT` in 989161) and
     /// Neucord's notice bar stands in for the box.
     pub open: bool,
     /// The box edits a message. The client's edit box (`EDIT` in 355622)
     /// has the emoji button and none of the others.
     pub editing: bool,
     /// A voice recording waits in the channel, which the client draws in
-    /// place of the box and the whole bar (`tG` in 989161).
+    /// place of the box and the whole bar (`tY` in 989161).
     pub recording: bool,
     /// A slash command is active (`getActiveCommand`): the client draws no
     /// GIF or sticker button beside it (`null == K`).
@@ -79,12 +79,12 @@ pub struct Shown {
     pub apps: bool,
     /// The send button, last in the row after a separator (`eu`).
     pub send: bool,
-    /// The send button can be pressed: `G` in 4025 greys it with nothing to
+    /// The send button can be pressed: `j` in 290153 greys it with nothing to
     /// send. An active command is something to send: the client's box then
     /// holds the command's text.
     pub send_enabled: bool,
     /// The character count, which Neucord draws in the row a recording
-    /// takes. A command has none (`tD` in 989161).
+    /// takes. A command has none (`tk` in 989161).
     pub count: bool,
     /// The command's app icon, in the attach button's place (`eY` in
     /// 699344).

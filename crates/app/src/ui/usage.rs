@@ -191,7 +191,7 @@ impl App {
         });
     }
 
-    /// `R` in 416380: look again later, load the proto if something waits
+    /// `L` in 416380: look again later, load the proto if something waits
     /// for it, then ask for a save. `first` is the look after connecting,
     /// which servers and channels alone don't make load the proto.
     fn usage_look(self: &Rc<Self>, first: bool) {

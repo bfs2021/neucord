@@ -7,8 +7,8 @@
 //! the desktop app made on Linux, not from the web client: Opus packets of
 //! 20 ms, `OpusTags` padded to 764 bytes, one Ogg page for every 50 packets,
 //! and a final 20 ms silence packet. What the web client does with the file
-//! is in 841817 (`es`, `ea`, `em`), the rules for offering it in 87207 and
-//! 158781's `K`, and the recorder's bridge in 198620.
+//! is in 841817 (`es`, `el`, `eE`), the rules for offering it in 87207 and
+//! 426819's `j`, and the recorder's bridge in 198620.
 
 use std::collections::VecDeque;
 

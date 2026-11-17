@@ -1,6 +1,6 @@
 //! Message components. Link buttons open their link; the other buttons and
 //! the menus of options send an interaction, as the official client's do
-//! (964363, 911408, 232430), and show it is on its way until Discord
+//! (964363, 911408, 736157), and show it is on its way until Discord
 //! answers. Menus of users, roles and channels, and buttons that buy
 //! something, are shown but can't be used.
 
@@ -310,7 +310,7 @@ fn menu_widget(menu: &Menu, component: &Component, images: Option<&Images>, live
 /// A menu of options: the button shows what is picked, and a popover lists
 /// them. What is picked is given to `commit` when the list closes with
 /// something changed since it last took it: for one option when it is
-/// chosen, for several when the list is dismissed (`nt` in 232430).
+/// chosen, for several when the list is dismissed (`na` in 736157).
 /// `commit` says whether it took it. Committing then leaves the popover
 /// whole when the menu is drawn again.
 pub(super) fn choices_button(

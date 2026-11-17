@@ -601,7 +601,7 @@ impl App {
         slot.as_ref()?.command.options.iter().find(|o| o.name == pill.option).map(|o| o.kind)
     }
 
-    /// The app's picture in the attach button's place (`eY` in 699344,
+    /// The app's picture in the attach button's place (`eQ` in 699344,
     /// `getApplicationIconURL` with `botIconFirst`): the bot's avatar in
     /// this server, else its own, else the app's icon, never animated; a
     /// symbolic icon without one. Its tooltip names the bot, else the app.

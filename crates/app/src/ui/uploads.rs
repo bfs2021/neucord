@@ -427,7 +427,7 @@ impl App {
         let drafts = &self.drafts;
         let channel = self.attach_channel();
         // The menu holds more than files: it shows wherever anything in it does.
-        // A command's app icon takes its place (`eY` in 699344).
+        // A command's app icon takes its place (`eQ` in 699344).
         drafts.attach.set_visible(
             (channel.is_some()
                 || self.voice_channel().is_some()
@@ -517,7 +517,7 @@ impl App {
             move |view| {
                 let Some(this) = this.upgrade() else { return };
                 // With a command in the box, a file goes to its file option (84046),
-                // which takes one without Attach Files (`nS` in 989161).
+                // which takes one without Attach Files (`nT` in 989161).
                 let pasted = match this.slash.is_active() {
                     true => Some(this.clipboard_pasted().0),
                     false => this.composer_paste().map(|(pasted, _)| pasted),
@@ -783,7 +783,7 @@ impl App {
     }
 
     /// A command's or a form's file (`setFile` with `allowOptimization: !1`,
-    /// 102077 and 232430): never converted, with no spoiler or edit button,
+    /// 102077 and 736157): never converted, with no spoiler or edit button,
     /// and a remove button (tooltip `remove`) that calls `removed`, which
     /// decides what taking it back does. Its upload starts at once, unless
     /// `CloudUpload.upload` (48325) would turn it down before any request:
