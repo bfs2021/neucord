@@ -212,6 +212,14 @@ pub enum Event {
         not_found: Vec<Snowflake>,
         users: Vec<User>,
     },
+    /// The answer to a request of [`crate::member_check`], after its
+    /// [`Event::Members`]: whom it found, and whom it says isn't a member.
+    MembersChecked {
+        guild_id: Snowflake,
+        nonce: String,
+        found: Vec<Snowflake>,
+        not_found: Vec<Snowflake>,
+    },
     /// A server's settings changed, its roles among them. It has no channels
     /// and no member of ours: see [`Guild::update`].
     GuildUpdate(Guild),
@@ -674,6 +682,21 @@ impl Gateway {
         }
     }
 
+    /// Ask for `users`' members in `guild` to check they are still members
+    /// ([`crate::member_check`]): as [`Gateway::request_members`], with
+    /// `nonce`, which the answer carries back as [`Event::MembersChecked`].
+    pub fn check_members(&self, guild: Snowflake, users: &[Snowflake], nonce: &str) {
+        if self.state.established.get() {
+            let request = MemberRequest { nonce: Some(nonce), ..MemberRequest::new(guild, users) };
+            send_text(&self.conn, &request_text(8, &request));
+        }
+    }
+
+    /// Whether the session is established: until then nothing is asked.
+    pub fn is_established(&self) -> bool {
+        self.state.established.get()
+    }
+
     /// Search `guild`'s members whose names start with `query` (at most
     /// `limit`), as a pill naming a user does (`queryGuildUsers` in 997625,
     /// through [`crate::members::MemberSearch`]): op 8 with the query, which
@@ -717,17 +740,20 @@ impl Gateway {
     }
 }
 
-/// Op 8's payload, in the client's field order.
+/// Op 8's payload, in the client's field order. Only the `@` suggestions'
+/// check names a `nonce` (`requestMembersByIdWithNonce`, 778858).
 #[derive(serde::Serialize)]
 struct MemberRequest<'a> {
     guild_id: [Snowflake; 1],
     user_ids: &'a [Snowflake],
     presences: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<&'a str>,
 }
 
 impl<'a> MemberRequest<'a> {
     fn new(guild: Snowflake, users: &'a [Snowflake]) -> Self {
-        MemberRequest { guild_id: [guild], user_ids: users, presences: false }
+        MemberRequest { guild_id: [guild], user_ids: users, presences: false, nonce: None }
     }
 }
 
@@ -1197,7 +1223,14 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
             let not_found = data["not_found"].as_array().into_iter().flatten().filter_map(parse_id).collect();
             let users =
                 data["members"].as_array().into_iter().flatten().filter_map(|m| User::deserialize(&m["user"]).ok());
-            Event::Members { guild_id, members, not_found, users: users.collect() }
+            let Some(nonce) = data["nonce"].as_str() else {
+                return parser.push(Event::Members { guild_id, members, not_found, users: users.collect() });
+            };
+            let found = members.iter().map(|(user, _)| *user).collect();
+            let answer =
+                Event::MembersChecked { guild_id, nonce: nonce.to_owned(), found, not_found: not_found.clone() };
+            parser.push(Event::Members { guild_id, members, not_found, users: users.collect() });
+            answer
         }
         "GUILD_UPDATE" => match Guild::from_value(&data) {
             Ok(guild) => Event::GuildUpdate(guild),
@@ -1267,9 +1300,7 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
             let Some(update) = MemberListUpdate::from_value(&data) else {
                 return eprintln!("gateway: bad GUILD_MEMBER_LIST_UPDATE");
             };
-            let members = (update.members().iter())
-                .map(|m| (m.user.id, Known { roles: m.roles.clone(), nick: m.nick.clone(), avatar: m.avatar.clone() }))
-                .collect();
+            let members = (update.members().iter()).map(|m| (m.user.id, m.known())).collect();
             parser.push(Event::Members { guild_id: update.guild, members, not_found: Vec::new(), users: Vec::new() });
             Event::MemberList(Box::new(update))
         }
@@ -1951,6 +1982,19 @@ mod tests {
         let named: Vec<(Snowflake, &str, &str)> =
             users.iter().map(|u| (u.id, u.username.as_str(), u.display_name())).collect();
         assert_eq!(named, [(Snowflake(8), "u8", "Eight")], "a search's answer brings whom it found whole");
+
+        dispatch(
+            &state,
+            "GUILD_MEMBERS_CHUNK",
+            json!({"guild_id": "1", "members": [{"user": {"id": "8", "username": "u8"}, "roles": []}],
+                   "not_found": ["9"], "chunk_index": 0, "chunk_count": 1, "nonce": "gmv:a:1"}),
+        );
+        assert!(matches!(state.try_recv(), Ok(Event::Members { .. })), "the members go in first");
+        let Ok(Event::MembersChecked { guild_id, nonce, found, not_found }) = state.try_recv() else {
+            panic!("no answer to the check")
+        };
+        assert_eq!((guild_id, nonce.as_str()), (Snowflake(1), "gmv:a:1"));
+        assert_eq!((found, not_found), (vec![Snowflake(8)], vec![Snowflake(9)]));
     }
 
     #[test]
@@ -2121,6 +2165,12 @@ mod tests {
     fn member_request_as_the_client_sends_it() {
         let d = MemberRequest::new(Snowflake(1), &[Snowflake(6), Snowflake(7)]);
         assert_eq!(request_text(8, &d), r#"{"op":8,"d":{"guild_id":["1"],"user_ids":["6","7"],"presences":false}}"#);
+        let checked = MemberRequest { nonce: Some("gmv:mi3etw5c:1"), ..d };
+        assert_eq!(
+            request_text(8, &checked),
+            r#"{"op":8,"d":{"guild_id":["1"],"user_ids":["6","7"],"presences":false,"nonce":"gmv:mi3etw5c:1"}}"#,
+            "the check's, as `requestMembersByIdWithNonce` sends it"
+        );
     }
 
     #[test]

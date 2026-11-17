@@ -1122,13 +1122,23 @@ pub struct MessageMember {
     pub nick: Option<String>,
     #[serde(default)]
     pub avatar: Option<String>,
+    #[serde(default)]
+    pub joined_at: Option<String>,
+    #[serde(default)]
+    pub flags: u64,
 }
 
 impl MessageMember {
     /// What shows of them (see [`crate::members::Known`]).
     pub fn known(&self) -> crate::members::Known {
         let text = |v: &Option<String>| v.clone().filter(|s| !s.is_empty());
-        crate::members::Known { roles: self.roles.clone(), nick: text(&self.nick), avatar: text(&self.avatar) }
+        crate::members::Known {
+            roles: self.roles.clone(),
+            nick: text(&self.nick),
+            avatar: text(&self.avatar),
+            joined_at: self.joined_at.as_ref().and_then(|t| unix_rounded_up(&Value::String(t.clone()))),
+            guest: self.flags & crate::members::IS_GUEST != 0,
+        }
     }
 }
 

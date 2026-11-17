@@ -913,6 +913,7 @@ class Handler(BaseHTTPRequestHandler):
                     log(kind="gateway", op=message["op"], d=message.get("d"), at=time.time())
                     if message["op"] == 8:
                         member_search(send, message.get("d") or {})
+                        member_check(send, message.get("d") or {})
         except (EOFError, OSError):
             pass
         if SESSION[0] is send:
@@ -925,10 +926,28 @@ def member_search(send, d):
     query = d.get("query")
     if query is None:
         return
-    found = [u for u in (ALICE, BOB) if u["username"].startswith(query) or u["global_name"].lower().startswith(query)]
+    found = [u for u in (ALICE, BOB) if u["id"] not in LEFT
+             and (u["username"].startswith(query) or u["global_name"].lower().startswith(query))]
     for guild in d.get("guild_id", []):
         send(0, {"guild_id": guild, "members": [{"user": u, "roles": [], "nick": None} for u in found[:d.get("limit", 10)]],
                  "not_found": [], "chunk_index": 0, "chunk_count": 1}, "GUILD_MEMBERS_CHUNK")
+
+
+# Who has left the server, by user id: the `@` suggestions' check finds them gone.
+LEFT = set(filter(None, os.environ.get("FAKE_LEFT", "").split(",")))
+
+
+def member_check(send, d):
+    """Op 8 with `user_ids` and a `nonce`: the members found, and whom `FAKE_LEFT` names as not found."""
+    nonce, users = d.get("nonce"), d.get("user_ids")
+    if nonce is None or users is None:
+        return
+    people = {u["id"]: u for u in (ALICE, BOB)}
+    found = [{"user": people.get(u, {"id": u, "username": "u" + u}), "roles": [], "nick": None,
+              "joined_at": "2026-01-01T00:00:00.000000+00:00", "flags": 0} for u in users if u not in LEFT]
+    for guild in d.get("guild_id", []):
+        send(0, {"guild_id": guild, "members": found, "not_found": [u for u in users if u in LEFT],
+                 "chunk_index": 0, "chunk_count": 1, "nonce": nonce}, "GUILD_MEMBERS_CHUNK")
 
 
 form_message()

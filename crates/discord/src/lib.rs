@@ -44,6 +44,7 @@ pub mod limits;
 pub mod locales;
 pub mod markup;
 pub mod media;
+pub mod member_check;
 pub mod member_list;
 pub mod members;
 pub mod modal;
