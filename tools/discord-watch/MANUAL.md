@@ -169,6 +169,17 @@ changed for unrelated reasons only needs a note in the issue.
   761304; and Use Apps in the attach menu, 316576 (anchor
   `canUseApplicationCommands`), which a pending reply hides, and which the
   App Launcher replaces while the Apps button is off.
+- **What the message box's `@` list offers** (`chat_mentions` in
+  `ui/composer.rs`, `App::mentions`, `mention_list.rs`), and a pill's.
+  `queryMentionResults`, `queryChannelUsers` and `queryGuildUsers` are
+  watched. Not watched: the box asks for the channel's people, mentionable
+  roles and `@everyone` and `@here` (`e7` and `ta` in 496533, anchor
+  `canMentionAnyGuildUser`) where `canMentionEveryone` in 152210 holds (a
+  private channel, Mention @everyone there, or our membership pending); a
+  member counts once joined and past screening (`eg` in 997625), people
+  rank by `eN` there (anchor `getGlobalName`), roles by match-sorter
+  (896170, anchor `CASE_SENSITIVE_EQUAL`), and `@everyone` and `@here`
+  match by `fuzzysearch` (91871).
 - **`ansi` code blocks** (`markup::ansi`, `render::ansi_markup`). Which codes
   read, and how: the parser in 626551 (anchor `brightMagenta`): the style
   codes it takes, in what order a sequence's resets and sets apply, that every

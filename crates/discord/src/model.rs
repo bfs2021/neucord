@@ -423,6 +423,9 @@ pub struct Role {
     /// Given by an integration (a bot, boosting), never by hand.
     #[serde(default, deserialize_with = "null_is_false")]
     pub managed: bool,
+    /// Anyone may mention it, not only those who may mention everyone.
+    #[serde(default, deserialize_with = "null_is_false")]
+    pub mentionable: bool,
     /// Higher is above; `@everyone` is always at the bottom.
     #[serde(default, deserialize_with = "null_is_default")]
     pub position: i32,
@@ -1126,6 +1129,8 @@ pub struct MessageMember {
     pub joined_at: Option<String>,
     #[serde(default)]
     pub flags: u64,
+    #[serde(default)]
+    pub pending: bool,
 }
 
 impl MessageMember {
@@ -1138,6 +1143,7 @@ impl MessageMember {
             avatar: text(&self.avatar),
             joined_at: self.joined_at.as_ref().and_then(|t| unix_rounded_up(&Value::String(t.clone()))),
             guest: self.flags & crate::members::IS_GUEST != 0,
+            pending: self.pending,
         }
     }
 }

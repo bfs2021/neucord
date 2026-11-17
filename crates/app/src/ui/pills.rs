@@ -23,6 +23,7 @@ use discord::builtins::BuiltIn;
 use discord::command_line::{self, Caret, Change, Edit, Header, Line, Marked, OptionStates, Part};
 use discord::commands::{self, CommandOption, Focus, Pick, RunFrom, Selection, Values, option_type};
 use discord::members::{PILL_SEARCH_LIMIT, SEARCH_WAIT};
+use discord::mention_list::{self, Person};
 use gtk::{glib, pango};
 
 use super::App;
@@ -888,7 +889,7 @@ impl App {
                 let query = word.strip_prefix('@').unwrap_or(&word).to_owned();
                 let members = matches!(option.kind, USER | MENTIONABLE);
                 let roles = matches!(option.kind, ROLE | MENTIONABLE);
-                let (found, everyone, found_roles) = self.mentions(channel, &query, members, roles);
+                let (found, everyone, found_roles) = self.mentions(channel, &query, members, roles, false);
                 let header = command_line::mention_header(members, found.len(), everyone, found_roles.len(), &query)?;
                 let mut candidates: Vec<Completion> =
                     found.into_iter().map(|(id, name)| Completion::Mention(id.0, name)).collect();
@@ -915,7 +916,7 @@ impl App {
                 let (word_start, token) = word_at(&typed.chars().collect::<Vec<_>>(), 0, typed.chars().count());
                 let at = pill.value.start + word_start;
                 let candidates = match token.strip_prefix('@') {
-                    Some(prefix) if option.kind == STRING && !prefix.contains('@') => self.mention_candidates(prefix),
+                    Some(prefix) if option.kind == STRING && !prefix.contains('@') => self.chat_mentions(prefix).0,
                     _ => match token.strip_prefix(':') {
                         Some(query) if query.chars().count() >= 2 && !query.contains(':') => {
                             self.emoji_candidates(query)
@@ -939,11 +940,20 @@ impl App {
 
     /// The members a USER or MENTIONABLE pill offers for `query`, `@everyone`
     /// and the roles (`td` in 496533, `XM` in 168186). In a server the
-    /// members it knows, and a search for the rest as the query changes
-    /// (`queryGuildUsers`, 997625); with nothing typed, who last talked
-    /// here. In a DM, its people. Every role but `@everyone`'s own, which
-    /// `@everyone` stands for.
-    fn mentions(self: &Rc<Self>, channel: Snowflake, query: &str, members: bool, roles: bool) -> (Named, bool, Named) {
+    /// members it knows that have joined and passed screening (`eg` in
+    /// 997625), and a search for the rest as the query changes
+    /// (`queryGuildUsers`); with nothing typed, who last talked here. In a
+    /// DM, its people. Every role but `@everyone`'s own, which `@everyone`
+    /// stands for. `in_channel` keeps to the members who can see the channel,
+    /// as the message box's list does (`queryChannelUsers`).
+    pub(super) fn mentions(
+        self: &Rc<Self>,
+        channel: Snowflake,
+        query: &str,
+        members: bool,
+        roles: bool,
+        in_channel: bool,
+    ) -> (Named, bool, Named) {
         let lower = query.to_lowercase();
         let rank = |names: &[&str]| {
             let names: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
@@ -962,7 +972,12 @@ impl App {
             let mut people: Vec<(Snowflake, String, Option<String>)> = Vec::new();
             match &guild {
                 Some(g) => {
-                    for (user, known) in state.members.of_guild(g.id) {
+                    let offered = |user: Snowflake, known: &discord::members::Known| {
+                        known.joined_at.is_some()
+                            && !known.pending
+                            && (!in_channel || discord::permissions::member_can_view(g, open, user, &known.roles))
+                    };
+                    for (user, known) in state.members.of_guild(g.id).filter(|(user, known)| offered(*user, known)) {
                         if let Some(name) = state.users.get(&user.0) {
                             people.push((user, name.clone(), known.nick.clone()));
                         }
@@ -1000,16 +1015,25 @@ impl App {
                 }
             }
             if listed.is_empty() {
-                let mut ranked: Vec<(u8, String, Snowflake)> = found
-                    .iter()
-                    .filter_map(|(id, name, nick)| {
-                        let shown = nick.clone().unwrap_or_else(|| name.clone());
-                        let names: Vec<&str> = [Some(name.as_str()), nick.as_deref()].into_iter().flatten().collect();
-                        Some((rank(&names)?, shown, *id))
+                // The client keeps its member store's order among equals; Neucord's has none, so by name.
+                let mut sorted: Vec<&(Snowflake, String, Option<String>)> = found.iter().collect();
+                sorted.sort_by_key(|(_, name, nick)| nick.as_ref().unwrap_or(name).to_lowercase());
+                let state = self.account.state.borrow();
+                let people: Vec<Person> = (sorted.iter())
+                    .map(|(id, name, nick)| {
+                        let user = state.whole_users.get(&id.0);
+                        Person {
+                            id: *id,
+                            username: user.map_or(name.as_str(), |u| u.username.as_str()),
+                            global_name: user.and_then(|u| u.global_name.as_deref()),
+                            nick: nick.as_deref(),
+                        }
                     })
                     .collect();
-                ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
-                listed = ranked.into_iter().take(LISTED).map(|(_, name, id)| (id, name)).collect();
+                listed = (mention_list::rank_people(query, &people, LISTED).into_iter())
+                    .filter_map(|id| found.iter().find(|p| p.0 == id))
+                    .map(|(id, name, nick)| (*id, nick.clone().unwrap_or_else(|| name.clone())))
+                    .collect();
             }
             if let Some(g) = &guild
                 && !query.is_empty()

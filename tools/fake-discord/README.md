@@ -88,7 +88,8 @@ what arrived, IDENTIFY's key order and properties first.
   `bot-commands` (with `FAKE_NSFW=dms=1`, which puts settings proto 1 in
   READY) lists a bot's commands after its mention, and turns them off and
   on from the message box's menu; `member-check` (with `FAKE_LEFT=302`)
-  lists Bob in a pill, whose check then drops him;
+  lists Bob in a pill, whose check then drops him; `mentions` (and with
+  `FAKE_OWNER=1`, `@everyone` and `@here`) lists the message box's `@`;
   `reopen` and `lazy` relaunch on the same data
   (`ACCOUNT=<name>` keeps it between runs).
 
