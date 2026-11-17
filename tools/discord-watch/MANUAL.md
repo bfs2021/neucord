@@ -343,10 +343,10 @@ changed for unrelated reasons only needs a note in the issue.
   `Re` in 307731 leaves `POLLS` out of the intentions that refuse other
   servers' emoji.
 - **What Nitro, boosts and experiments allow** (`limits.rs`, and its message
-  length in `ui/composer.rs`). `R` in 722178, below the perks each premium
-  type includes (anchor `ProductCatalog.tsx`), asks the `perks` bitmask when
-  the user has one, else that table. A message takes 4000 characters with
-  the perk, else 2000 (135621, anchor `? 4e3 : 2e3`). A longer one is turned
+  length in `ui/composer.rs`). The perks each premium type includes, and the
+  checks on them, are watched (`premium perks`, where `R` asks the `perks`
+  bitmask when the user has one, else that table). A message takes 4000
+  characters with the perk, else 2000 (135621, anchor `? 4e3 : 2e3`). A longer one is turned
   back (710272, anchor `MESSAGE_LENGTH_UPSELL`): a new message once trimmed
   (`handleSendMessage` in 699344), an edit as it stands. The counter shows
   from a tenth of the limit left, and past 2000 with the perk (263582,

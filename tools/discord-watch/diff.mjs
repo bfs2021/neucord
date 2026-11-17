@@ -13,6 +13,9 @@ const MAX_LINES = 80;
 // isn't a change in the client. One the client doesn't have is still reported,
 // or a wrong or vanished name would go unwatched for good.
 const newlyWatched = (before, after) => before === undefined && after?.length > 0;
+// A name dropped from watch.json has no entry in the new snapshot, which
+// always has one for every name it looked for.
+const unwatched = (after) => after === undefined;
 
 function describeCalls(calls) {
   if (!calls) return "no call in the client";
@@ -98,7 +101,7 @@ export function compare(old, cur, uses) {
   const rule = (bodies) => (bodies?.length ? bodies.map(code).join(" | ") : "not found");
   for (const name of Object.keys({ ...old.methods, ...cur.methods }).sort()) {
     const [before, after] = [old.methods?.[name], cur.methods?.[name]];
-    if (!old.methods || same(before, after) || newlyWatched(before, after)) continue;
+    if (!old.methods || same(before, after) || newlyWatched(before, after) || unwatched(after)) continue;
     const change = after?.length ? "the client's rule changed" : "not found";
     affects.push(`- ${code(name)}: ${change}\n  - was: ${rule(before)}\n  - now: ${rule(after)}`);
   }
@@ -107,7 +110,7 @@ export function compare(old, cur, uses) {
   // to quote: the full diff shows what changed.
   for (const name of Object.keys({ ...old.stores, ...cur.stores }).sort()) {
     const [before, after] = [old.stores?.[name], cur.stores?.[name]];
-    if (!old.stores || same(before, after) || newlyWatched(before, after)) continue;
+    if (!old.stores || same(before, after) || newlyWatched(before, after) || unwatched(after)) continue;
     affects.push(`- ${code(name)}: ${after?.length ? "the client's rule changed" : "not found"}`);
   }
 
@@ -116,7 +119,7 @@ export function compare(old, cur, uses) {
   // no function of their own.
   for (const name of Object.keys({ ...old.modules, ...cur.modules }).sort()) {
     const [before, after] = [old.modules?.[name], cur.modules?.[name]];
-    if (!old.modules || same(before, after) || newlyWatched(before, after)) continue;
+    if (!old.modules || same(before, after) || newlyWatched(before, after) || unwatched(after)) continue;
     affects.push(`- ${code(name)}: ${after?.length ? "the client's rule changed" : "not found"}`);
   }
 
@@ -125,7 +128,7 @@ export function compare(old, cur, uses) {
   const value = (values) => (values?.length ? values.map((v) => code(JSON.stringify(v))).join(" | ") : "not found");
   for (const name of Object.keys({ ...old.constants, ...cur.constants }).sort()) {
     const [before, after] = [old.constants?.[name], cur.constants?.[name]];
-    if (!old.constants || same(before, after) || newlyWatched(before, after)) continue;
+    if (!old.constants || same(before, after) || newlyWatched(before, after) || unwatched(after)) continue;
     const change = after?.length ? "the client's value changed" : "not found";
     affects.push(`- ${code(name)}: ${change}\n  - was: ${value(before)}\n  - now: ${value(after)}`);
   }
@@ -136,7 +139,7 @@ export function compare(old, cur, uses) {
   const fieldsOf = (definitions) => Object.assign({}, ...(definitions ?? []));
   for (const name of Object.keys({ ...old.protos, ...cur.protos }).sort()) {
     const [before, after] = [old.protos?.[name], cur.protos?.[name]];
-    if (!old.protos || same(before, after) || newlyWatched(before, after)) continue;
+    if (!old.protos || same(before, after) || newlyWatched(before, after) || unwatched(after)) continue;
     if (!after?.length) {
       affects.push(`- ${code(name)}: not found`);
       continue;
@@ -173,8 +176,10 @@ export function compare(old, cur, uses) {
   }
 
   // Code holding a rule Neucord copies that starts or stops reading an
-  // experiment: the rule may now differ per account.
+  // experiment: the rule may now differ per account. Code the last snapshot
+  // has no entry for was just added to watch.json or MANUAL.md.
   for (const key of old.reached ? Object.keys({ ...old.reached, ...cur.reached }).sort() : []) {
+    if (!Object.hasOwn(old.reached, key)) continue;
     const change = listChange(old.reached[key], cur.reached?.[key]);
     if (change) affects.push(`- ${code(key)}, which holds a rule Neucord copies, reads experiments: ${change}`);
   }

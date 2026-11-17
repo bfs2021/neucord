@@ -575,6 +575,8 @@ export async function snapshot(dir) {
       const named = [];
       // A method exported by name from a function declared apart:
       // `getEmojiUnavailableReason: N` in the export map, `function N(e)` above.
+      // Keyed by the declaring identifier, as a minifier gives the same name to
+      // functions in scopes that don't see each other.
       const functions = new Map();
       const aliased = [];
       const messages = [];
@@ -654,9 +656,9 @@ export async function snapshot(dir) {
             if (protos.has(message.name)) messages.push([message.name, message.fields]);
           }
         }
-        if (node.type === "FunctionDeclaration" && node.id) functions.set(node.id.name, node);
+        if (node.type === "FunctionDeclaration" && node.id) functions.set(node.id, node);
         if (node.type === "Property" && node.value.type === "Identifier" && methods.has(keyName(node))) {
-          aliased.push([keyName(node), node.value.name]);
+          aliased.push([keyName(node), node.value]);
         }
         // Class methods, class fields holding a function and object methods
         // alike: `isSystemDM() { … }`, `persistChanges = async () => { … }`.
@@ -719,7 +721,7 @@ export async function snapshot(dir) {
         }
       }
       for (const [name, id] of aliased) {
-        const target = functions.get(id);
+        const target = functions.get(bindings.declared.get(id));
         if (target) {
           methods.get(name).add(normalized(source, target));
           copy(target, name);
@@ -755,11 +757,12 @@ export async function snapshot(dir) {
     const touched = table[name];
     return [...touched.experiments, ...touched.reads.flatMap((r) => resolve(r, depth - 1, seen))];
   };
+  // Code that reads none is kept too, so a report can tell code that starts
+  // reading one from code just added to watch.json or MANUAL.md.
   const reached = {};
   for (const [key, { experiments: own, reads }] of copied) {
     const seen = new Set();
-    const names = new Set([...own, ...[...reads].flatMap((r) => resolve(r, 1, seen))]);
-    if (names.size > 0) reached[key] = [...names].sort();
+    reached[key] = [...new Set([...own, ...[...reads].flatMap((r) => resolve(r, 1, seen))])].sort();
   }
 
   // A message field's type by name, wherever the client defines it.
