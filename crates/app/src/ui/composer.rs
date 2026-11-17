@@ -311,6 +311,15 @@ impl App {
             .build();
         self.mention_popover.set_child(Some(&scroller));
         self.mention_popover.set_parent(&self.composer);
+        // Closed, the suggestions check no one ([`App::suggestions_closed`]).
+        self.mention_popover.connect_closed({
+            let this = Rc::downgrade(self);
+            move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.suggestions_closed();
+                }
+            }
+        });
         self.mention_list.connect_row_activated({
             let this = Rc::downgrade(self);
             move |_, row| {
@@ -772,6 +781,17 @@ impl App {
     /// Show what `ctx` lists in the popup, under its headers, `selected`
     /// selected.
     pub(super) fn show_listed(self: &Rc<Self>, ctx: MentionCtx, selected: Option<usize>) {
+        // The people listed are checked to still be members (`m` in 579974).
+        let people: Vec<Snowflake> = (ctx.candidates.iter())
+            .filter_map(|c| match c {
+                Completion::Mention(id, _) => Some(Snowflake(*id)),
+                _ => None,
+            })
+            .collect();
+        match people.is_empty() {
+            true => self.suggestions_closed(),
+            false => self.suggestions_listed(people),
+        }
         if ctx.candidates.is_empty() {
             self.mention_popover.popdown();
             return;

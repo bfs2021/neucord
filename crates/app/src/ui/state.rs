@@ -269,6 +269,14 @@ pub(super) struct State {
     pub(super) members: Members,
     /// The pills' searches of servers' members by name.
     pub(super) member_search: MemberSearch,
+    /// Whether the members the `@` suggestions list are still members, and
+    /// which wake-up of it is current.
+    pub(super) member_check: discord::member_check::MemberCheck,
+    pub(super) member_check_timer: u64,
+    /// What the suggestions last listed in a server, and which wait for it
+    /// to settle is current.
+    pub(super) suggested: Option<(Snowflake, Vec<Snowflake>)>,
+    pub(super) suggested_timer: u64,
     /// `/gif`'s searches, kept for the session (`IntegrationQueryStore`).
     pub(super) gif_commands: discord::gifs::CommandSearches,
     /// `/gif`'s one debounce (`eb`), which nothing cancels.

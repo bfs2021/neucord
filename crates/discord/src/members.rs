@@ -70,21 +70,33 @@ impl Guild {
 
 /// What a server says of one of its members that shows in the chat: their
 /// roles colour their name, and their nickname and picture replace their own.
+/// When they joined and whether they are a guest decide whether the `@`
+/// suggestions check them again ([`crate::member_check`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Known {
     pub roles: Vec<Snowflake>,
     pub nick: Option<String>,
     pub avatar: Option<String>,
+    /// In seconds, rounded up, as [`crate::model::Member`] keeps it.
+    pub joined_at: Option<i64>,
+    /// `IS_GUEST` in the member's flags: in by a voice invite, not a member.
+    pub guest: bool,
 }
+
+/// `IS_GUEST` (`GuildMemberFlags`).
+pub(crate) const IS_GUEST: u64 = 1 << 4;
 
 impl Known {
     /// From a member object, with or without its user.
     pub fn from_value(value: &serde_json::Value) -> Known {
         let text = |v: &serde_json::Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+        let member = crate::model::Member::from_value(value);
         Known {
-            roles: crate::model::Member::from_value(value).roles,
+            roles: member.roles,
             nick: text(&value["nick"]),
             avatar: text(&value["avatar"]),
+            joined_at: member.joined_at,
+            guest: member.flags & IS_GUEST != 0,
         }
     }
 }
@@ -182,6 +194,16 @@ impl Members {
         }
         out.sort();
         out
+    }
+
+    /// `user`'s member in `guild`, if we know it.
+    pub fn known(&self, guild: Snowflake, user: Snowflake) -> Option<&Known> {
+        self.known.get(&(guild, user))
+    }
+
+    /// Discord says `user` is no member of `guild` (`GUILD_MEMBER_REMOVE`).
+    pub fn forget(&mut self, guild: Snowflake, user: Snowflake) {
+        self.known.remove(&(guild, user));
     }
 
     /// The members of `guild` we know, by user.
