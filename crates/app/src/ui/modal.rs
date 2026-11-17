@@ -1,5 +1,5 @@
 //! An app's form (a modal): opened by any `INTERACTION_MODAL_CREATE`
-//! (764056), drawn as 121338 and 232430 draw it, checked on every change and
+//! (764056), drawn as 121338 and 736157 draw it, checked on every change and
 //! on Submit, and sent as MODAL_SUBMIT. What it holds and sends is
 //! [`discord::modal`]. A dialog like Create Thread's: X and Escape cancel,
 //! Submit ends the header.
@@ -127,7 +127,7 @@ fn caption(text: &str) -> gtk::Label {
     gtk::Label::builder().label(text).xalign(0.0).wrap(true).css_classes(["caption", "dimmed"]).build()
 }
 
-/// A file field (232430 `eK`): drawn again on every change, from the
+/// A file field (736157 `eK`): drawn again on every change, from the
 /// field's state and the form's files that are still there.
 struct FileField {
     channel: Snowflake,
@@ -172,7 +172,7 @@ impl App {
     }
 
     /// The name each default of the form's entity selects goes by, for those
-    /// that resolve (`er` in 232430): a known user, by their nickname in the
+    /// that resolve (`er` in 736157): a known user, by their nickname in the
     /// modal channel's server or their name; a role of that server; one of
     /// its channels of an allowed type. The rest are dropped.
     fn modal_defaults(&self, modal: &Modal) -> Vec<(Snowflake, String)> {
@@ -767,7 +767,7 @@ impl App {
         });
     }
 
-    /// Add files to a field as `T` in 232430's `eK` does: refused all
+    /// Add files to a field as `T` in 736157's `eK` does: refused all
     /// together for the count, a size or a type, else each starts
     /// uploading at once, never converted.
     async fn add_form_files(self: &Rc<Self>, files: &Rc<FileField>, paths: Vec<gio::File>) {

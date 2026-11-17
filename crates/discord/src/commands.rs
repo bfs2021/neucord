@@ -940,7 +940,7 @@ pub fn typed_command<'a>(found: Vec<Found<'a>>, text: &str, terminated: bool) ->
 }
 
 /// When a popup list selects its first row by itself (`focusMode` in
-/// 133746's navigator).
+/// 152210's navigator).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Focus {
     /// As soon as it shows (no `focusMode`): the suggestions, a pill's
@@ -967,7 +967,7 @@ pub enum Pick {
     Selected,
 }
 
-/// Which row of the box's popup is selected (31498 with 133746's
+/// Which row of the box's popup is selected (31498 with 152210's
 /// navigator), one model for every list it shows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
@@ -1067,7 +1067,7 @@ impl BuiltIns {
 }
 
 /// What the message box's `/` offers (`ta` in 496533, and the bare `/`'s
-/// browser, `ed` in 989161): while a reply is pending
+/// browser, `eu` in 989161): while a reply is pending
 /// (`canOnlyUseTextCommands`), no app's commands and only the built-ins
 /// that write text (`NEW_TEXT_ONLY`).
 pub fn offer(replying: bool) -> Offer {
@@ -1157,7 +1157,7 @@ pub struct Browsed<'a> {
     pub commands: Vec<Found<'a>>,
 }
 
-/// What a bare `/` lists: the client's command browser (`ed` in 989161,
+/// What a bare `/` lists: the client's command browser (`eu` in 989161,
 /// through `XC` and `ei` in 264322), the commands `offer` and `builtins`
 /// allow in sections. The used most come first when any count here (at most
 /// [`FREQUENTLY_USED`], by score, each still in its own section too), then
@@ -1902,7 +1902,7 @@ pub fn match_choices<'c>(choices: &'c [Choice], query: &str) -> Vec<&'c Choice> 
     scored.into_iter().map(|(_, choice)| choice).collect()
 }
 
-/// A limit as the client writes it (`x` in 300541, `toLocaleString` without
+/// A limit as the client writes it (`I` in 300541, `toLocaleString` without
 /// grouping): the number's shortest decimal form, rounded half away from zero
 /// to at most three decimals, with its sign even where that leaves a zero.
 fn plain(n: f64) -> String {

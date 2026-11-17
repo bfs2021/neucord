@@ -1057,7 +1057,7 @@ impl App {
 
     /// Listen for what the user does to the list: only that loads history.
     /// Each of these also lifts a pause, as in the client (`onWheel`,
-    /// `onTouchMove`, `onKeyDown`, `onMouseDown` and `onMouseUp` in 567008).
+    /// `onTouchMove`, `onKeyDown`, `onMouseDown` and `onMouseUp` in 812266).
     fn watch_scroll_input(self: &Rc<Self>) {
         let input = gtk::EventControllerLegacy::new();
         input.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -1583,7 +1583,7 @@ impl App {
 }
 
 /// How long the moves after `event` count as the user's, if it's one that
-/// scrolls: the keys are `il` in 567008.
+/// scrolls: the keys are `ic` in 812266.
 fn scroll_input(event: &gdk::Event) -> Option<Duration> {
     match event.event_type() {
         gdk::EventType::Scroll | gdk::EventType::TouchUpdate => Some(SCROLL_INPUT),

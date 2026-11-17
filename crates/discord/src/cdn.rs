@@ -205,7 +205,7 @@ fn is_external(url: &Url) -> bool {
 }
 
 /// An image of Discord's media proxy asked to stay animated, as the GIF
-/// picker's previews are (`F` in 884037): a WebP or AVIF of the proxy's
+/// picker's previews are (`b` in 884037): a WebP or AVIF of the proxy's
 /// `/external/` or of an attachment says `animated=true`, and a GIF there
 /// is asked for as an animated WebP. Any other URL comes back unchanged.
 pub fn animated(url: &str) -> String {

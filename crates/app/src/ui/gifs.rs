@@ -94,7 +94,7 @@ impl App {
     }
 
     /// Pulse the GIF button after a GIF is favourited, from any star (`er` in
-    /// 4025): its content blinks once (style.css), and it pulses until
+    /// 290153): its content blinks once (style.css), and it pulses until
     /// [`PULSE_MS`] after the last favourite. One meanwhile only restarts the
     /// timer, so the blink doesn't replay. A hidden button, which the client
     /// hasn't mounted, doesn't pulse.
@@ -119,7 +119,7 @@ impl App {
     }
 
     /// Show "Added to Favorites" over the GIF button while it pulses, for the
-    /// account's first two favourite GIFs (`er` in 4025). Favourites not loaded
+    /// account's first two favourite GIFs (`es` in 290153). Favourites not loaded
     /// yet aren't the account's count, and saved nothing.
     pub(super) fn refresh_gif_hint(&self) {
         let shows = self.gif_pulse.borrow().is_some() && self.gif_button.is_mapped() && {

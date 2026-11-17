@@ -1,6 +1,6 @@
 //! A user's profile, in the popout the client opens from a name, an avatar,
 //! a mention or a member list row (`342296`, drawn by `348434`), in the panel
-//! beside a DM (`ok` in 289287), and the menu on those places
+//! beside a DM (`ok` in 420018), and the menu on those places
 //! (`user-context`, 107632). Asking for the profile and keeping it is
 //! [`discord::profile`]'s; this draws what it holds.
 
@@ -36,7 +36,7 @@ pub(super) struct UserTarget {
 
 /// A banner's width and height as the client draws it: the popout's
 /// (`bannerWidth` and `bannerHeight` of `POPOUT` in 207634), which the panel
-/// takes in the redesign (`specOverrides` in 289287), and the panel's own
+/// takes in the redesign (`specOverrides` in 420018), and the panel's own
 /// (`SIDEBAR`). The popout is as wide as its banner.
 const POPOUT_BANNER: (i32, i32) = (300, 105);
 const PANEL_BANNER: (i32, i32) = (340, 120);

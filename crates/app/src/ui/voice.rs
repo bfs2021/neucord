@@ -110,7 +110,7 @@ impl App {
     /// The open channel, if Record Voice Message is offered there now: the
     /// experiment, Send Voice Messages, no forum, nothing waiting to be sent
     /// with it (files, a sticker or a draft recording), not while editing
-    /// (87207, and `K` in 158781), and a machine that can record.
+    /// (87207, and `j` in 426819), and a machine that can record.
     pub(super) fn voice_channel(&self) -> Option<Snowflake> {
         let channel = self.account.state.borrow().channel?;
         let waiting = discord::voice::Waiting {
@@ -194,7 +194,7 @@ impl App {
             .build();
         self.window.add_action_entries([record]);
         if let Some(app) = self.window.application() {
-            // The client's binding where it isn't macOS (158781).
+            // The client's binding where it isn't macOS (426819).
             app.set_accels_for_action("win.record-voice-message", &["<Alt>r"]);
         }
     }

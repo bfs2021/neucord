@@ -176,13 +176,13 @@ pub struct FileUpload {
     pub file_types: Vec<String>,
 }
 
-/// A file field at its limit (`eV` in 232430).
+/// A file field at its limit (`eV` in 736157).
 pub const FILES_FULL: &str = "File upload limit reached";
 pub const FILES_FULL_HINT: &str = "Remove some files to upload new ones.";
 /// A file's remove button (`N86XcP`).
 pub const REMOVE_FILE: &str = "Remove";
 
-/// Why files weren't added to a file field (`T` in 232430's `eK`), in the
+/// Why files weren't added to a file field (`T` in 736157's `eK`), in the
 /// order it asks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileRefusal {
@@ -618,7 +618,7 @@ impl Draft {
     }
 }
 
-/// A field's first state (232430's `no`, `nt`, `er`, `e7`, `ev`, `eC`): a
+/// A field's first state (736157's `nd`, `na`, `er`, `ne`, `ev`, `eC`): a
 /// text input's `value`; the `default` options, if any; the defaults that
 /// resolve, if any; a radio group's first `default`; a checkbox's
 /// `default`, if given.

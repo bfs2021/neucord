@@ -112,7 +112,7 @@ pub(super) fn ready(me: Snowflake, experiments: &Experiments) {
 
 /// Assignments arrived after READY (`STATE_UPDATE`): the client folds them
 /// into the store that is kept (`CONNECTION_OPEN_STATE_UPDATE`, 225123 into
-/// 50258), so the next IDENTIFY goes by them.
+/// 340344), so the next IDENTIFY goes by them.
 pub(super) fn assignments_changed(me: Snowflake, experiments: &Experiments) {
     identity::learn_assignments(experiments.user_cache(me));
     save();

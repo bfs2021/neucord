@@ -3,7 +3,7 @@
 //! from the client's code, so the client's own definitions say what a
 //! variant means, and only READY says which one applies.
 //!
-//! READY carries three kinds. Apex experiments (50258) are assigned by
+//! READY carries three kinds. Apex experiments (340344) are assigned by
 //! Discord per user, install or server, keyed by murmur3 of the name. Older
 //! user experiments (343446) are assigned buckets. Older server experiments
 //! (343446) arrive as rollout rules, which the client evaluates itself for
@@ -375,7 +375,7 @@ impl Experiments {
     }
 
     /// Our own Apex assignments, as the client keeps them between launches
-    /// (the persisted `ApexExperimentStore`, 50258), in READY's layout.
+    /// (the persisted `ApexExperimentStore`, 340344), in READY's layout.
     pub fn user_cache(&self, me: Snowflake) -> Vec<Value> {
         let Some(assignments) = self.apex.get(&(Self::USER, me.0.to_string())) else { return Vec::new() };
         let mut cached: Vec<_> = assignments.iter().map(|(hash, a)| (*hash, a.to_value(*hash))).collect();
@@ -393,7 +393,7 @@ impl Experiments {
 
     /// Fold in the assignments of a `STATE_UPDATE`: each unit's entry is
     /// replaced whole and the rest stays, as the client's
-    /// `setExperimentAssignments` does (50258).
+    /// `setExperimentAssignments` does (340344).
     pub fn apply_update(&mut self, update: Experiments) {
         self.apex.extend(update.apex);
     }
@@ -405,7 +405,7 @@ impl Experiments {
     }
 
     /// A server's Apex assignment for a server experiment: only for a user
-    /// Discord made eligible, unless forced (50258's
+    /// Discord made eligible, unless forced (340344's
     /// `getEvaluationAndAssignment`).
     pub fn apex_guild(&self, me: Snowflake, guild: Snowflake, name: &str) -> Option<&Assignment> {
         let user = self.apex_assignment(Self::USER, &me.0.to_string(), name)?;

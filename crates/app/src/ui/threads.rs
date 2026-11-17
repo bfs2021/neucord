@@ -364,7 +364,7 @@ impl App {
 
     /// The threads header button: shown for a channel that takes threads
     /// and for a thread, whose parent's threads it lists (`renderHeaderToolbar`
-    /// in 289287).
+    /// in 420018).
     pub(super) fn sync_threads_button(&self) {
         let shown = {
             let state = self.account.state.borrow();
@@ -390,7 +390,7 @@ impl App {
         });
     }
 
-    /// The box under a message that started a thread (`r8` in 679636): the
+    /// The box under a message that started a thread (`r8` in 190854): the
     /// thread's name and how many messages it holds, opening it. Only for a
     /// thread we know, as there.
     pub(super) fn thread_accessory(self: &Rc<Self>, message: &Message) -> Option<gtk::Widget> {

@@ -64,7 +64,7 @@ pub(super) struct View {
     stickers: gtk::ListBox,
     shown: RefCell<Shown>,
     /// The trimmed `/gif` query last seen: the search goes only when it
-    /// changes (`T` in 31498's `queryResults`).
+    /// changes (`y` in 31498's `queryResults`).
     asked: RefCell<Option<String>>,
 }
 
@@ -154,7 +154,7 @@ impl App {
     }
 
     /// The active command's search and the text of its `query` option
-    /// (`optionText`): empty while the caret is outside it (133746).
+    /// (`optionText`): empty while the caret is outside it (152210).
     fn integration_text(&self) -> Option<(Integration, Snowflake, String)> {
         let (integration, channel) = {
             let slot = self.slash.active.borrow();
@@ -546,7 +546,7 @@ impl App {
                 buffer.set_text(&url);
                 buffer.place_cursor(&buffer.end_iter());
             }
-            // `nm` in 989161's `BUILT_IN_INTEGRATION` arm, where the box's text never
+            // `nE` in 989161's `BUILT_IN_INTEGRATION` arm, where the box's text never
             // counts: alone it goes at once and the box clears whatever the send does;
             // with files or a sticker waiting it waits instead, and the command stays.
             Picked::Sticker(entry) => {

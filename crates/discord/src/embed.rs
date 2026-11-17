@@ -201,7 +201,7 @@ impl EmbedMedia {
         Some(Media { original: original.to_owned(), url, width, height, animated, star: None })
     }
 
-    /// An image of a gallery. The client gives each its own star (`e_`,
+    /// An image of a gallery. The client gives each its own star (`ec`,
     /// 265705) when it animates: itself, with no video or provider to go by.
     fn gallery_item(&self) -> Option<Media> {
         let mut item = self.proxied()?;
@@ -331,7 +331,7 @@ impl Embed {
     }
 
     /// What the star on the embed's picture or GIF link favourites: the inputs
-    /// `cP` (679636) gives `b` (343552). The picture is the image or else the
+    /// `cP` (190854) gives `b` (343552). The picture is the image or else the
     /// video, through the proxy where there is one. A GIF link is filed
     /// under its page, another embed under its image's or video's own link.
     /// Klipy's still-animated file is its thumbnail. A video makes it a

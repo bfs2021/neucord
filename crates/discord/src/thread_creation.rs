@@ -19,7 +19,7 @@ pub const FROM_MESSAGE_MENU: &str = "Message";
 pub const FROM_SLASH_COMMAND: &str = "Slash Command";
 
 /// The longest name the client's name box takes, in UTF-16 units (`rm` in
-/// 289287).
+/// 420018).
 pub const NAME_MAX: usize = 100;
 
 /// What the name box shows where nothing is typed (`Nb2/RE`), and what a
@@ -139,7 +139,7 @@ pub enum Missing {
     Message,
 }
 
-/// What the form lacks (`submit` in 289287): a name where the thread isn't
+/// What the form lacks (`submit` in 420018): a name where the thread isn't
 /// from a message, and something to say, text, a sticker or a file. A name
 /// of spaces counts as empty here, though it is sent as it is.
 pub fn missing(from_message: bool, name: &str, text: &str, has_more: bool) -> Vec<Missing> {

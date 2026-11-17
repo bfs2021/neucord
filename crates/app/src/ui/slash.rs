@@ -66,7 +66,7 @@ pub(super) enum Keep {
 
 /// The widgets for slash commands, around the message box.
 pub(super) struct Slash {
-    /// Above the message box while a command is in it (`tV` in 989161): the
+    /// Above the message box while a command is in it (`tF` in 989161): the
     /// option the caret is in, or the command.
     pub(super) bar: gtk::Box,
     pub(super) title: gtk::Label,
@@ -487,10 +487,10 @@ impl App {
 
     /// A reply started or ended: the `/` list follows it at once, fetching
     /// nothing. A bare `/`'s list is the client's command browser, whose
-    /// filters follow the reply (`ed` in 989161) and which fetches only as it
+    /// filters follow the reply (`eu` in 989161) and which fetches only as it
     /// opens (`ee`, `et` in 264322); a typed list is asked again whenever
     /// `PendingReplyStore` changes, one of the stores of `B` in 496533 that
-    /// 133746 listens to, without `allowFetch` (31498).
+    /// 152210 listens to, without `allowFetch` (31498).
     pub(super) fn reply_changed_slash(self: &Rc<Self>) {
         self.slash_popup(false);
     }
