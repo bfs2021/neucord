@@ -226,9 +226,17 @@ function declarations(root) {
  * read from it (`<import>.DM`). Whitespace goes too, so the text only changes with the
  * code. A whole webpack module takes its imports (`r = n(17928)`) for
  * another module's, and its export map for `<exports>`, as both are named
- * by the minifier. */
-function normalized(source, fn, { module = false } = {}) {
-  const require = module ? fn.params[2]?.name : undefined;
+ * by the minifier.
+ *
+ * What the bundler numbers goes too, as a build renumbers it without the
+ * code changing: the module ids passed to `require` (`n(17928)`,
+ * `n.bind(n, 17928)`) become `<module>`, and loading a lazy module's chunks,
+ * `n.e(…)` or `Promise.all([n.e(…), …])` however many, becomes `<chunks>`.
+ * `require` names the module's require where `fn` is inside it, and `build`
+ * the build number, which some code holds and becomes `<build>`. */
+function normalized(source, fn, { module = false, require: outer, build } = {}) {
+  const param = module ? fn.params[2] : undefined;
+  const require = module ? param?.name : undefined;
   const declared = declarations(fn);
   const imports = new Set();
   walk(fn, (n) => {
@@ -240,7 +248,42 @@ function normalized(source, fn, { module = false } = {}) {
   const local = (id) => declared.has(id) && !imports.has(declared.get(id));
   const names = new Set();
   const edits = [];
+  // The module's own require: its parameter, or from outside the function.
+  const requireName = module ? require : outer;
+  const isRequire = (id) =>
+    id?.type === "Identifier" && id.name === requireName && (module ? declared.get(id) === param : !local(id));
+  const numeric = (node) => node?.type === "Literal" && typeof node.value === "number";
+  const loadsChunk = (node) =>
+    node?.type === "CallExpression" &&
+    node.callee.type === "MemberExpression" &&
+    !node.callee.computed &&
+    node.callee.property.name === "e" &&
+    isRequire(node.callee.object);
+  const loadsChunks = (node) =>
+    loadsChunk(node) ||
+    (node?.type === "CallExpression" &&
+      node.callee.type === "MemberExpression" &&
+      node.callee.object.name === "Promise" &&
+      node.callee.property.name === "all" &&
+      node.arguments[0]?.type === "ArrayExpression" &&
+      node.arguments[0].elements.length > 0 &&
+      node.arguments[0].elements.every(loadsChunk));
   walk(fn, (n) => {
+    if (loadsChunks(n)) {
+      edits.push({ start: n.start, end: n.end, text: "<chunks>" });
+      return false;
+    }
+    if (n.type === "CallExpression") {
+      const [first, second] = n.arguments;
+      if (isRequire(n.callee) && numeric(first)) edits.push({ start: first.start, end: first.end, text: "<module>" });
+      const bound = n.callee.type === "MemberExpression" && !n.callee.computed && n.callee.property.name === "bind";
+      if (bound && isRequire(n.callee.object) && numeric(second)) {
+        edits.push({ start: second.start, end: second.end, text: "<module>" });
+      }
+    }
+    if (n.type === "Literal" && build != null && String(n.value) === String(build)) {
+      edits.push({ start: n.start, end: n.end, text: "<build>" });
+    }
     const callee = n.type === "CallExpression" ? n.callee : null;
     if (
       require &&
@@ -504,6 +547,7 @@ function sorted(value) {
 
 export async function snapshot(dir) {
   const meta = JSON.parse(await readFile(join(dir, "build.json"), "utf8"));
+  const build = meta.build;
   const endpointTables = [];
   const calls = new Map();
   const gateway = new Map();
@@ -563,7 +607,7 @@ export async function snapshot(dir) {
       // Modules found by strings, for rules that sit in no named function.
       for (const [name, anchors] of Object.entries(WATCH.modules)) {
         if (anchors.every((anchor) => text.includes(anchor))) {
-          anchored.get(name).add(normalized(source, body, { module: true }));
+          anchored.get(name).add(normalized(source, body, { module: true, build }));
           copy(body, name);
         }
       }
@@ -665,7 +709,7 @@ export async function snapshot(dir) {
         if (["MethodDefinition", "PropertyDefinition", "Property"].includes(node.type) && isFunction(node.value)) {
           const name = !node.computed && node.key.type === "Identifier" ? node.key.name : null;
           if (methods.has(name)) {
-            methods.get(name).add(normalized(source, node.value));
+            methods.get(name).add(normalized(source, node.value, { require, build }));
             copy(node.value, name);
           }
         }
@@ -674,7 +718,7 @@ export async function snapshot(dir) {
         if (node.type === "PropertyDefinition" && node.static && !node.computed && node.key.name === "displayName") {
           const name = node.value?.value;
           if (stores.has(name)) {
-            stores.get(name).add(normalized(source, body, { module: true }));
+            stores.get(name).add(normalized(source, body, { module: true, build }));
           }
         }
         // A store's class: its rules are its methods and what they call.
@@ -723,7 +767,7 @@ export async function snapshot(dir) {
       for (const [name, id] of aliased) {
         const target = functions.get(bindings.declared.get(id));
         if (target) {
-          methods.get(name).add(normalized(source, target));
+          methods.get(name).add(normalized(source, target, { require, build }));
           copy(target, name);
         }
       }
