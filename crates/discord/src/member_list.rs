@@ -75,6 +75,7 @@ pub struct Member {
     /// In seconds, rounded up (see [`crate::model::Member`]).
     pub joined_at: Option<i64>,
     pub flags: u64,
+    pub pending: bool,
 }
 
 impl Member {
@@ -86,6 +87,7 @@ impl Member {
             avatar: self.avatar.clone(),
             joined_at: self.joined_at,
             guest: self.flags & crate::members::IS_GUEST != 0,
+            pending: self.pending,
         }
     }
 
@@ -121,6 +123,7 @@ impl Item {
             },
             joined_at: parsed.joined_at,
             flags: parsed.flags,
+            pending: parsed.pending,
         })))
     }
 }
@@ -477,6 +480,7 @@ mod tests {
             presence: Presence::default(),
             joined_at: None,
             flags: 0,
+            pending: false,
         }))
     }
 

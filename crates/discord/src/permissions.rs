@@ -345,26 +345,7 @@ fn compute(guild: &Guild, overwrites: &[crate::model::Overwrite], me: &Account, 
 
 /// From our roles and the overwrites; the owner never gets here.
 fn member(guild: &Guild, overwrites: &[crate::model::Overwrite], me: &Account, now: i64) -> Permissions {
-    let everyone = guild.role(guild.id).map_or(Permissions::DEFAULT_EVERYONE, |r| r.permissions);
-    let base = guild.my_roles.iter().filter_map(|&id| guild.role(id)).fold(everyone, |p, r| p | r.permissions);
-    if base.contains(Permissions::ADMINISTRATOR) {
-        return Permissions::ALL;
-    }
-    // Overwrites are keyed by id: `@everyone`'s is the server's own.
-    let find = |id| overwrites.iter().rfind(|o| o.id == id);
-    let mut permissions = base;
-    if let Some(o) = find(guild.id) {
-        permissions = permissions.overwritten(o.deny, o.allow);
-    }
-    let (deny, allow) = guild
-        .my_roles
-        .iter()
-        .filter_map(|&id| find(id))
-        .fold((Permissions::NONE, Permissions::NONE), |(deny, allow), o| (deny | o.deny, allow | o.allow));
-    permissions = permissions.overwritten(deny, allow);
-    if let Some(o) = find(me.id) {
-        permissions = permissions.overwritten(o.deny, o.allow);
-    }
+    let mut permissions = from_roles(guild, overwrites, me.id, &guild.my_roles);
     if !permissions.contains(Permissions::ADMINISTRATOR) {
         if guild.member_flags & AUTOMOD_QUARANTINED != 0 {
             permissions = permissions & Permissions::QUARANTINED;
@@ -374,6 +355,52 @@ fn member(guild: &Guild, overwrites: &[crate::model::Overwrite], me: &Account, n
         }
     }
     permissions
+}
+
+/// What `user`'s roles and the overwrites give: `@everyone`'s, then their
+/// roles', then the overwrites of `@everyone`, of their roles together and
+/// of them, unless a role makes them an administrator.
+fn from_roles(
+    guild: &Guild,
+    overwrites: &[crate::model::Overwrite],
+    user: Snowflake,
+    roles: &[Snowflake],
+) -> Permissions {
+    let everyone = guild.role(guild.id).map_or(Permissions::DEFAULT_EVERYONE, |r| r.permissions);
+    let base = roles.iter().filter_map(|&id| guild.role(id)).fold(everyone, |p, r| p | r.permissions);
+    if base.contains(Permissions::ADMINISTRATOR) {
+        return Permissions::ALL;
+    }
+    // Overwrites are keyed by id: `@everyone`'s is the server's own.
+    let find = |id| overwrites.iter().rfind(|o| o.id == id);
+    let mut permissions = base;
+    if let Some(o) = find(guild.id) {
+        permissions = permissions.overwritten(o.deny, o.allow);
+    }
+    let (deny, allow) = (roles.iter())
+        .filter_map(|&id| find(id))
+        .fold((Permissions::NONE, Permissions::NONE), |(deny, allow), o| (deny | o.deny, allow | o.allow));
+    permissions = permissions.overwritten(deny, allow);
+    if let Some(o) = find(user) {
+        permissions = permissions.overwritten(o.deny, o.allow);
+    }
+    permissions
+}
+
+/// Whether another member, `user` with `roles`, can see `channel` (a
+/// thread's parent stands for it): the message box's `@` list offers only
+/// them (`queryChannelUsers` in 997625, asking 488926's `$3` for View
+/// Channel). The owner always can.
+pub fn member_can_view(guild: &Guild, channel: &Channel, user: Snowflake, roles: &[Snowflake]) -> bool {
+    let channel = match channel.parent_id.filter(|_| channel.kind.is_thread()) {
+        Some(parent) => match guild.channel(parent) {
+            Some(parent) => parent,
+            None => return false,
+        },
+        None => channel,
+    };
+    guild.owner_id == Some(user)
+        || from_roles(guild, &channel.permission_overwrites, user, roles).contains(Permissions::VIEW_CHANNEL)
 }
 
 /// What it takes to see `channel` at all (the client's `accessPermissions`):
@@ -725,6 +752,19 @@ mod tests {
 
     fn can(guild: &Guild, channel: &Channel, permissions: Permissions) -> bool {
         in_channel(guild, channel, &me(), 0).contains(permissions)
+    }
+
+    #[test]
+    fn whom_the_at_list_offers_can_see_the_channel() {
+        let guild = guild();
+        let (them, theirs) = (Snowflake(7), [Snowflake(MOD)]);
+        let staff = channel(&[(GUILD, VIEW, Permissions::NONE), (MOD, Permissions::NONE, VIEW)]);
+        assert!(member_can_view(&guild, &staff, them, &theirs), "by a role's overwrite");
+        assert!(!member_can_view(&guild, &staff, them, &[]), "@everyone can't");
+        assert!(member_can_view(&guild, &staff, Snowflake(2), &[]), "the owner can");
+        let hidden = channel(&[(7, VIEW, Permissions::NONE)]);
+        assert!(!member_can_view(&guild, &hidden, them, &theirs), "their own overwrite comes last");
+        assert!(member_can_view(&guild, &channel(&[]), them, &[]));
     }
 
     #[test]

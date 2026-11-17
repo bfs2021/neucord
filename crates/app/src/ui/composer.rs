@@ -6,9 +6,11 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use discord::chat_bar::{self, Bar, Prefs};
+use discord::command_line::Header;
 use discord::cooldowns::{Slowmode, bypasses_slowmode, wait_words};
 use discord::emoji::{Intention, Item as Emoji, locked_notice};
 use discord::limits::{LengthCount, TooLong, message_length};
+use discord::mention_list::{self, Global};
 use discord::notice::Notice;
 use discord::rest::{Reply, ReplyPing};
 use discord::scheduled;
@@ -127,8 +129,10 @@ pub(super) enum Completion {
     Choice(String),
     Role(Snowflake, String),
     Channel(Snowflake, String),
-    /// `@everyone`, for a role or mentionable pill.
+    /// `@everyone`, for a role or mentionable pill, or in the box.
     Everyone,
+    /// `@here`, in the box.
+    Here,
     /// A line that can't be picked: loading, a failure, nothing found.
     Status(String),
 }
@@ -138,6 +142,9 @@ impl Completion {
     fn text(&self) -> String {
         match self {
             Completion::Mention(id, _) => format!("<@{id}> "),
+            Completion::Role(id, _) => format!("<@&{id}> "),
+            Completion::Everyone => "@everyone ".to_owned(),
+            Completion::Here => "@here ".to_owned(),
             Completion::Emoji(item) => format!("{} ", item.text()),
             _ => String::new(),
         }
@@ -153,6 +160,7 @@ impl Completion {
             Completion::Choice(name) | Completion::Status(name) => name.clone(),
             Completion::Channel(_, name) => format!("#{name}"),
             Completion::Everyone => "@everyone".to_owned(),
+            Completion::Here => "@here".to_owned(),
         }
     }
 
@@ -761,10 +769,12 @@ impl App {
             return;
         }
         let buffer = self.composer.buffer();
-        let found = match mention_token(&buffer) {
-            Some((start, prefix)) => Some((start, self.mention_candidates(&prefix))),
-            None => emoji_token(&buffer).map(|(start, query)| (start, self.emoji_candidates(&query))),
-        };
+        if let Some((start, prefix)) = mention_token(&buffer) {
+            let (candidates, header) = self.chat_mentions(&prefix);
+            let headers = header.map(|h| vec![(0, h)]).unwrap_or_default();
+            return self.show_listed(MentionCtx { start, candidates, headers, ..MentionCtx::default() }, Some(0));
+        }
+        let found = emoji_token(&buffer).map(|(start, query)| (start, self.emoji_candidates(&query)));
         match found {
             Some((start, candidates)) => self.show_completions(start, candidates),
             None if self.bot_command_popup(true) => {}
@@ -826,22 +836,38 @@ impl App {
         self.mention_popover.popup();
     }
 
-    pub(super) fn mention_candidates(&self, prefix: &str) -> Vec<Completion> {
-        let prefix = prefix.to_lowercase();
-        let state = self.account.state.borrow();
-        let mut matches: Vec<(u64, String)> = state
-            .users
-            .iter()
-            .filter(|(_, name)| name.to_lowercase().contains(&prefix))
-            .map(|(id, name)| (*id, name.clone()))
-            .collect();
-        // Prefix matches first, then alphabetical; cap the list.
-        matches.sort_by(|a, b| {
-            let rank = |n: &str| if n.to_lowercase().starts_with(&prefix) { 0 } else { 1 };
-            rank(&a.1).cmp(&rank(&b.1)).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-        });
-        matches.truncate(8);
-        matches.into_iter().map(|(id, name)| Completion::Mention(id, name)).collect()
+    /// What the `@` list offers for `prefix` in the open channel, under its
+    /// header (`e7` in 496533, `queryMentionResults` in 997625): the people
+    /// who can see it ([`App::mentions`]), then roles, `@everyone` and
+    /// `@here` where we may name them ([`discord::mention_list`]), ten rows
+    /// at most.
+    pub(super) fn chat_mentions(self: &Rc<Self>, prefix: &str) -> (Vec<Completion>, Option<Header>) {
+        let Some(channel) = self.account.state.borrow().channel else { return (Vec::new(), None) };
+        let (people, _, _) = self.mentions(channel, prefix, true, false, true);
+        let (roles, globals) = {
+            let state = self.account.state.borrow();
+            match (state.find_channel(channel), &state.account) {
+                (Some((Some(guild), open)), Some(me)) => {
+                    let permitted = discord::permissions::in_channel(guild, open, me, now_unix())
+                        .contains(discord::permissions::Permissions::MENTION_EVERYONE);
+                    let everyone = mention_list::may_mention_everyone(false, permitted, guild.pending);
+                    let roles = mention_list::roles(guild, prefix, everyone, people.len());
+                    let listed = people.len() + roles.len();
+                    (mention_list::named(&roles), mention_list::globals(prefix, everyone, false, listed))
+                }
+                _ => (Vec::new(), Vec::new()),
+            }
+        };
+        let header =
+            discord::command_line::mention_header(true, people.len(), !globals.is_empty(), roles.len(), prefix);
+        let mut candidates: Vec<Completion> =
+            people.into_iter().map(|(id, name)| Completion::Mention(id.0, name)).collect();
+        candidates.extend(globals.into_iter().map(|global| match global {
+            Global::Everyone => Completion::Everyone,
+            Global::Here => Completion::Here,
+        }));
+        candidates.extend(roles.into_iter().map(|(id, name)| Completion::Role(id, name)));
+        (candidates, header)
     }
 
     /// The emoji we may send in the open channel that `query` finds, best

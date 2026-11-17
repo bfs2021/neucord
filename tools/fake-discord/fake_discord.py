@@ -262,8 +262,8 @@ def supplemental():
     return {
         "guilds": [{"id": "500", "voice_states": [{"user_id": "301", "channel_id": "602", "session_id": "v1",
                                                   "deaf": False, "mute": False, "self_deaf": False, "self_mute": False}]}],
-        "merged_members": [[{"user_id": "301", "roles": ["510"], "nick": "Al", "flags": 0},
-                            {"user_id": "302", "roles": [], "flags": 0}]],
+        "merged_members": [[{"user_id": "301", "roles": ["510"], "nick": "Al", "flags": 0, "joined_at": JOINED},
+                            {"user_id": "302", "roles": [], "flags": 0, "joined_at": JOINED}]],
         "merged_presences": {"friends": [{"user_id": "301", "status": "online", "activities": [],
                                           "client_status": {"desktop": "online"}}], "guilds": [[]]},
         "lazy_private_channels": [{"id": "202", "type": 1, "last_message_id": snowflake(3000, 2), "flags": 0,
@@ -929,8 +929,13 @@ def member_search(send, d):
     found = [u for u in (ALICE, BOB) if u["id"] not in LEFT
              and (u["username"].startswith(query) or u["global_name"].lower().startswith(query))]
     for guild in d.get("guild_id", []):
-        send(0, {"guild_id": guild, "members": [{"user": u, "roles": [], "nick": None} for u in found[:d.get("limit", 10)]],
+        send(0, {"guild_id": guild, "members": [{"user": u, "roles": [], "nick": None, "joined_at": JOINED}
+                                                for u in found[:d.get("limit", 10)]],
                  "not_found": [], "chunk_index": 0, "chunk_count": 1}, "GUILD_MEMBERS_CHUNK")
+
+
+# When the made-up members joined: Discord's members always say.
+JOINED = "2026-01-01T00:00:00.000000+00:00"
 
 
 # Who has left the server, by user id: the `@` suggestions' check finds them gone.

@@ -81,6 +81,8 @@ pub struct Known {
     pub joined_at: Option<i64>,
     /// `IS_GUEST` in the member's flags: in by a voice invite, not a member.
     pub guest: bool,
+    /// Still to pass the server's membership screening.
+    pub pending: bool,
 }
 
 /// `IS_GUEST` (`GuildMemberFlags`).
@@ -97,6 +99,7 @@ impl Known {
             avatar: text(&value["avatar"]),
             joined_at: member.joined_at,
             guest: member.flags & IS_GUEST != 0,
+            pending: member.pending,
         }
     }
 }
