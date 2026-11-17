@@ -757,11 +757,12 @@ export async function snapshot(dir) {
     const touched = table[name];
     return [...touched.experiments, ...touched.reads.flatMap((r) => resolve(r, depth - 1, seen))];
   };
+  // Code that reads none is kept too, so a report can tell code that starts
+  // reading one from code just added to watch.json or MANUAL.md.
   const reached = {};
   for (const [key, { experiments: own, reads }] of copied) {
     const seen = new Set();
-    const names = new Set([...own, ...[...reads].flatMap((r) => resolve(r, 1, seen))]);
-    if (names.size > 0) reached[key] = [...names].sort();
+    reached[key] = [...new Set([...own, ...[...reads].flatMap((r) => resolve(r, 1, seen))])].sort();
   }
 
   // A message field's type by name, wherever the client defines it.
