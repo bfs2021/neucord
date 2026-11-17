@@ -400,6 +400,14 @@ impl Experiments {
 
     /// Our Apex assignment for a user experiment, or `None` for its default
     /// config, as the client's `getConfig` decides.
+    ///
+    /// The client's store also has a launch latch (`resolveConfigAssignment`
+    /// in 340344), which can hold an assignment flagged as app-launch to the
+    /// one the last launch saw. It reads only where the installation's
+    /// variant of the experiment that switches it says so; with no
+    /// installation id, the case Neucord is in (it keeps none, see
+    /// `IDENTITY.md`), its flags are the default, which only record. So the
+    /// assignment is the one READY or a `STATE_UPDATE` brought.
     pub fn apex_user(&self, me: Snowflake, name: &str) -> Option<&Assignment> {
         self.apex_assignment(Self::USER, &me.0.to_string(), name).filter(|a| !a.use_as_eligibility())
     }
@@ -577,6 +585,21 @@ mod tests {
         assert_eq!(experiments.apex_user(ME, "2099-01-eligible-only"), None);
         // Someone else's assignments aren't ours.
         assert_eq!(experiments.apex_user(Snowflake(11), "2099-01-on"), None);
+    }
+
+    #[test]
+    fn an_app_launch_assignment_reads_as_it_came() {
+        // 16 is `IsAppLaunch`: with no installation id the launch latch only
+        // records, so a new session's variant is the one that applies.
+        let launch = |variant: i64| {
+            ready(json!({ "1": { "10": { "assignments": [
+            [murmur3("2099-01-launch"), variant, 16, 1],
+        ] } } }))
+        };
+        let mut experiments = Experiments::from_ready(&launch(1));
+        assert_eq!(experiments.apex_user(ME, "2099-01-launch").map(|a| a.variant), Some(1));
+        experiments.apply_update(Experiments::from_ready(&launch(2)));
+        assert_eq!(experiments.apex_user(ME, "2099-01-launch").map(|a| a.variant), Some(2));
     }
 
     #[test]
