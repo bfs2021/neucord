@@ -110,7 +110,7 @@ impl App {
     /// The open channel, if Record Voice Message is offered there now: the
     /// experiment, Send Voice Messages, no forum, nothing waiting to be sent
     /// with it (files, a sticker or a draft recording), not while editing
-    /// (87207, and `K` in 158781), and a machine that can record.
+    /// (87207, and `j` in 426819), and a machine that can record.
     pub(super) fn voice_channel(&self) -> Option<Snowflake> {
         let channel = self.account.state.borrow().channel?;
         let waiting = discord::voice::Waiting {
@@ -194,7 +194,7 @@ impl App {
             .build();
         self.window.add_action_entries([record]);
         if let Some(app) = self.window.application() {
-            // The client's binding where it isn't macOS (158781).
+            // The client's binding where it isn't macOS (426819).
             app.set_accels_for_action("win.record-voice-message", &["<Alt>r"]);
         }
     }
@@ -214,16 +214,7 @@ impl App {
         };
         voice.bar.set_visible(shown.is_some());
         self.composer.set_visible(shown.is_none());
-        self.emoji_button.set_visible(shown.is_none());
-        // `refresh_stickers` shows its button again when the draft is gone.
-        if shown.is_some() {
-            self.sticker_button.set_visible(false);
-        }
-        if shown.is_some() {
-            self.length.show(None);
-        } else {
-            self.update_length_indicator();
-        }
+        self.refresh_chat_bar();
         let Some((phase, started, millis)) = shown else { return };
         voice.stop.set_visible(phase == Phase::Recording);
         voice.delete.set_sensitive(matches!(phase, Phase::Requesting | Phase::Recording | Phase::Recorded));

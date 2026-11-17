@@ -27,7 +27,7 @@ const LIMIT_NARROWED: usize = 100;
 /// Channels remembered for "Previous Channels".
 pub const HISTORY: usize = 8;
 
-/// What a prefix narrows a query to (`AT` in 926140, and `k` in 793322).
+/// What a prefix narrows a query to (`AT` in 926140, and `F` in 793322).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// `@`: people, friends first.
@@ -65,7 +65,7 @@ pub struct Query {
     pub mode: Option<Mode>,
 }
 
-/// Split what was typed into a prefix and a query (`k` in 793322): the mode
+/// Split what was typed into a prefix and a query (`F` in 793322): the mode
 /// follows the first character, and the first prefix character found
 /// anywhere is cut out, so `foo#bar` searches `foobar` everywhere.
 pub fn parse(input: &str) -> Query {
@@ -233,7 +233,7 @@ fn fuzzy(needle: &str, haystack: &str) -> bool {
 }
 
 /// Lower case, combining marks dropped (`sS` in 23339).
-fn fold(text: &str) -> String {
+pub(crate) fn fold(text: &str) -> String {
     let decomposed = glib::normalize(text.to_lowercase(), glib::NormalizeMode::Default);
     let stripped: String = decomposed.chars().filter(|c| !('\u{300}'..='\u{36f}').contains(c)).collect();
     glib::normalize(stripped, glib::NormalizeMode::DefaultCompose).to_string()

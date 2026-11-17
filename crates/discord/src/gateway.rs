@@ -112,12 +112,13 @@ pub struct Ready {
 }
 
 /// How an interaction of ours ended, as the events `INTERACTION_SUCCESS`,
-/// `INTERACTION_FAILURE`, and `INTERACTION_MODAL_CREATE` and
-/// `INTERACTION_IFRAME_MODAL_CREATE` (a form to fill in) say.
+/// `INTERACTION_FAILURE` and `INTERACTION_IFRAME_MODAL_CREATE` say. An
+/// app's own form comes as [`Event::Modal`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Success,
     Failure,
+    /// A web page to show in a form (949548), which Neucord can't.
     Form,
 }
 
@@ -202,10 +203,21 @@ pub enum Event {
     },
     /// Other people's members, with their roles: those a server arrives
     /// with, one that changed, or those we asked for. `not_found` are users
-    /// we asked for who aren't members.
+    /// we asked for who aren't members. `users` are their users, which
+    /// only an answer to a request carries here: a search finds people
+    /// we've never seen.
     Members {
         guild_id: Snowflake,
         members: Vec<(Snowflake, Known)>,
+        not_found: Vec<Snowflake>,
+        users: Vec<User>,
+    },
+    /// The answer to a request of [`crate::member_check`], after its
+    /// [`Event::Members`]: whom it found, and whom it says isn't a member.
+    MembersChecked {
+        guild_id: Snowflake,
+        nonce: String,
+        found: Vec<Snowflake>,
         not_found: Vec<Snowflake>,
     },
     /// A server's settings changed, its roles among them. It has no channels
@@ -242,6 +254,9 @@ pub enum Event {
         outcome: Outcome,
         reason: Option<u64>,
     },
+    /// An app answered with a form (`INTERACTION_MODAL_CREATE`), ours or
+    /// not: the client opens any (764056).
+    Modal(Box<crate::modal::Modal>),
     /// Discord took the interaction we sent as `nonce` (`INTERACTION_CREATE`);
     /// the app has yet to answer.
     InteractionCreated {
@@ -667,6 +682,32 @@ impl Gateway {
         }
     }
 
+    /// Ask for `users`' members in `guild` to check they are still members
+    /// ([`crate::member_check`]): as [`Gateway::request_members`], with
+    /// `nonce`, which the answer carries back as [`Event::MembersChecked`].
+    pub fn check_members(&self, guild: Snowflake, users: &[Snowflake], nonce: &str) {
+        if self.state.established.get() {
+            let request = MemberRequest { nonce: Some(nonce), ..MemberRequest::new(guild, users) };
+            send_text(&self.conn, &request_text(8, &request));
+        }
+    }
+
+    /// Whether the session is established: until then nothing is asked.
+    pub fn is_established(&self) -> bool {
+        self.state.established.get()
+    }
+
+    /// Search `guild`'s members whose names start with `query` (at most
+    /// `limit`), as a pill naming a user does (`queryGuildUsers` in 997625,
+    /// through [`crate::members::MemberSearch`]): op 8 with the query, which
+    /// Discord answers with [`Event::Members`]. Like the client, nothing is
+    /// sent before the session is established.
+    pub fn search_members(&self, guild: Snowflake, query: &str, limit: usize) {
+        if self.state.established.get() {
+            send_text(&self.conn, &request_text(8, &MemberSearchRequest::new(guild, query, limit)));
+        }
+    }
+
     /// Tell Discord what we show as, as the client does (`presenceUpdate`,
     /// 868): op 3, see [`crate::presence`]. Like the client, nothing is sent
     /// before the session is established.
@@ -699,17 +740,37 @@ impl Gateway {
     }
 }
 
-/// Op 8's payload, in the client's field order.
+/// Op 8's payload, in the client's field order. Only the `@` suggestions'
+/// check names a `nonce` (`requestMembersByIdWithNonce`, 778858).
 #[derive(serde::Serialize)]
 struct MemberRequest<'a> {
     guild_id: [Snowflake; 1],
     user_ids: &'a [Snowflake],
     presences: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<&'a str>,
 }
 
 impl<'a> MemberRequest<'a> {
     fn new(guild: Snowflake, users: &'a [Snowflake]) -> Self {
-        MemberRequest { guild_id: [guild], user_ids: users, presences: false }
+        MemberRequest { guild_id: [guild], user_ids: users, presences: false, nonce: None }
+    }
+}
+
+/// Op 8's payload for a search, in the client's field order
+/// (`requestGuildMembers` in 868, from `GUILD_MEMBERS_REQUEST` in 225123,
+/// which asks for presences unless told not to).
+#[derive(serde::Serialize)]
+struct MemberSearchRequest<'a> {
+    guild_id: [Snowflake; 1],
+    query: &'a str,
+    limit: usize,
+    presences: bool,
+}
+
+impl<'a> MemberSearchRequest<'a> {
+    fn new(guild: Snowflake, query: &'a str, limit: usize) -> Self {
+        MemberSearchRequest { guild_id: [guild], query, limit, presences: true }
     }
 }
 
@@ -1038,7 +1099,7 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
                     .push(Event::GuildVoiceStates { guild_id, states: VoiceState::parse_list(&guild["voice_states"]) });
                 let members = members_of(&Value::Null, &data["merged_members"][i]);
                 if !members.is_empty() {
-                    parser.push(Event::Members { guild_id, members, not_found: Vec::new() });
+                    parser.push(Event::Members { guild_id, members, not_found: Vec::new(), users: Vec::new() });
                 }
             }
             for raw in data["merged_presences"]["friends"].as_array().into_iter().flatten() {
@@ -1138,11 +1199,21 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
             let Some(guild_id) = parse_id(&data["guild_id"]) else { return };
             if !parser.me.get().is_some_and(|me| is_me(&data, me)) {
                 let Some(member) = member_known(&data) else { return };
-                return parser.push(Event::Members { guild_id, members: vec![member], not_found: Vec::new() });
+                return parser.push(Event::Members {
+                    guild_id,
+                    members: vec![member],
+                    not_found: Vec::new(),
+                    users: Vec::new(),
+                });
             }
             // Our own nickname and picture show in the chat like anyone's.
             if let Some(known) = member_known(&data) {
-                parser.push(Event::Members { guild_id, members: vec![known], not_found: Vec::new() });
+                parser.push(Event::Members {
+                    guild_id,
+                    members: vec![known],
+                    not_found: Vec::new(),
+                    users: Vec::new(),
+                });
             }
             Event::MemberUpdate { guild_id, member: Member::from_value(&data) }
         }
@@ -1150,7 +1221,16 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
             let Some(guild_id) = parse_id(&data["guild_id"]) else { return };
             let members = data["members"].as_array().into_iter().flatten().filter_map(member_known).collect();
             let not_found = data["not_found"].as_array().into_iter().flatten().filter_map(parse_id).collect();
-            Event::Members { guild_id, members, not_found }
+            let users =
+                data["members"].as_array().into_iter().flatten().filter_map(|m| User::deserialize(&m["user"]).ok());
+            let Some(nonce) = data["nonce"].as_str() else {
+                return parser.push(Event::Members { guild_id, members, not_found, users: users.collect() });
+            };
+            let found = members.iter().map(|(user, _)| *user).collect();
+            let answer =
+                Event::MembersChecked { guild_id, nonce: nonce.to_owned(), found, not_found: not_found.clone() };
+            parser.push(Event::Members { guild_id, members, not_found, users: users.collect() });
+            answer
         }
         "GUILD_UPDATE" => match Guild::from_value(&data) {
             Ok(guild) => Event::GuildUpdate(guild),
@@ -1220,10 +1300,8 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
             let Some(update) = MemberListUpdate::from_value(&data) else {
                 return eprintln!("gateway: bad GUILD_MEMBER_LIST_UPDATE");
             };
-            let members = (update.members().iter())
-                .map(|m| (m.user.id, Known { roles: m.roles.clone(), nick: m.nick.clone(), avatar: m.avatar.clone() }))
-                .collect();
-            parser.push(Event::Members { guild_id: update.guild, members, not_found: Vec::new() });
+            let members = (update.members().iter()).map(|m| (m.user.id, m.known())).collect();
+            parser.push(Event::Members { guild_id: update.guild, members, not_found: Vec::new(), users: Vec::new() });
             Event::MemberList(Box::new(update))
         }
         "THREAD_CREATE" | "THREAD_UPDATE" => match (Channel::deserialize(&data), parse_id(&data["guild_id"])) {
@@ -1313,8 +1391,12 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
         "GUILD_CREATE" => {
             let Some(me) = parser.me.get() else { return };
             let Some(guild) = guild_with_member(&data, &Value::Null, me) else { return };
-            let members =
-                Event::Members { guild_id: guild.id, members: members_of(&data, &Value::Null), not_found: Vec::new() };
+            let members = Event::Members {
+                guild_id: guild.id,
+                members: members_of(&data, &Value::Null),
+                not_found: Vec::new(),
+                users: Vec::new(),
+            };
             let voice =
                 Event::GuildVoiceStates { guild_id: guild.id, states: VoiceState::parse_list(&data["voice_states"]) };
             parser.push(Event::GuildCreate(guild));
@@ -1353,10 +1435,11 @@ fn dispatch(parser: &Parser, name: &str, data: Value) {
                 components: data.get("components").and_then(|c| Vec::<Component>::deserialize(c).ok()),
             })
         }
-        "INTERACTION_SUCCESS"
-        | "INTERACTION_FAILURE"
-        | "INTERACTION_MODAL_CREATE"
-        | "INTERACTION_IFRAME_MODAL_CREATE" => {
+        "INTERACTION_MODAL_CREATE" => {
+            let Some(modal) = crate::modal::Modal::from_event(&data) else { return };
+            Event::Modal(Box::new(modal))
+        }
+        "INTERACTION_SUCCESS" | "INTERACTION_FAILURE" | "INTERACTION_IFRAME_MODAL_CREATE" => {
             // Without the nonce we sent, it isn't one of ours.
             let Some(nonce) = parse_id(&data["nonce"]) else { return };
             let outcome = match name {
@@ -1838,10 +1921,11 @@ mod tests {
         dispatch(
             &state,
             "USER_UPDATE",
-            json!({"id": "5", "verified": true, "email": "a@example.org", "mfa_enabled": true, "premium_type": 2}),
+            json!({"id": "5", "verified": true, "email": "a@example.org", "mfa_enabled": true, "premium_type": 2,
+                   "nsfw_allowed": true}),
         );
         let Ok(Event::AccountUpdate(account, nitro)) = state.try_recv() else { panic!("no account update") };
-        assert!(account.verified && account.email && !account.phone && account.mfa);
+        assert!(account.verified && account.email && !account.phone && account.mfa && account.nsfw_allowed);
         assert_eq!(nitro.premium_type, Some(crate::limits::PremiumType::Tier2));
 
         dispatch(&state, "CHANNEL_UPDATE", json!({"id": "9", "type": 0, "guild_id": "1", "rate_limit_per_user": 30}));
@@ -1890,11 +1974,27 @@ mod tests {
         dispatch(
             &state,
             "GUILD_MEMBERS_CHUNK",
-            json!({"guild_id": "1", "members": [{"user": {"id": "8"}, "roles": ["40"]}], "not_found": ["9"],
-                   "chunk_index": 0, "chunk_count": 1}),
+            json!({"guild_id": "1", "members": [{"user": {"id": "8", "username": "u8", "global_name": "Eight"},
+                   "roles": ["40"]}], "not_found": ["9"], "chunk_index": 0, "chunk_count": 1}),
         );
-        let Ok(Event::Members { members, not_found, .. }) = state.try_recv() else { panic!("no chunk") };
+        let Ok(Event::Members { members, not_found, users, .. }) = state.try_recv() else { panic!("no chunk") };
         assert_eq!((members, not_found), (vec![(Snowflake(8), roles(&[40]))], vec![Snowflake(9)]));
+        let named: Vec<(Snowflake, &str, &str)> =
+            users.iter().map(|u| (u.id, u.username.as_str(), u.display_name())).collect();
+        assert_eq!(named, [(Snowflake(8), "u8", "Eight")], "a search's answer brings whom it found whole");
+
+        dispatch(
+            &state,
+            "GUILD_MEMBERS_CHUNK",
+            json!({"guild_id": "1", "members": [{"user": {"id": "8", "username": "u8"}, "roles": []}],
+                   "not_found": ["9"], "chunk_index": 0, "chunk_count": 1, "nonce": "gmv:a:1"}),
+        );
+        assert!(matches!(state.try_recv(), Ok(Event::Members { .. })), "the members go in first");
+        let Ok(Event::MembersChecked { guild_id, nonce, found, not_found }) = state.try_recv() else {
+            panic!("no answer to the check")
+        };
+        assert_eq!((guild_id, nonce.as_str()), (Snowflake(1), "gmv:a:1"));
+        assert_eq!((found, not_found), (vec![Snowflake(8)], vec![Snowflake(9)]));
     }
 
     #[test]
@@ -2065,6 +2165,18 @@ mod tests {
     fn member_request_as_the_client_sends_it() {
         let d = MemberRequest::new(Snowflake(1), &[Snowflake(6), Snowflake(7)]);
         assert_eq!(request_text(8, &d), r#"{"op":8,"d":{"guild_id":["1"],"user_ids":["6","7"],"presences":false}}"#);
+        let checked = MemberRequest { nonce: Some("gmv:mi3etw5c:1"), ..d };
+        assert_eq!(
+            request_text(8, &checked),
+            r#"{"op":8,"d":{"guild_id":["1"],"user_ids":["6","7"],"presences":false,"nonce":"gmv:mi3etw5c:1"}}"#,
+            "the check's, as `requestMembersByIdWithNonce` sends it"
+        );
+    }
+
+    #[test]
+    fn member_search_as_the_client_sends_it() {
+        let d = MemberSearchRequest::new(Snowflake(1), "al", crate::members::PILL_SEARCH_LIMIT);
+        assert_eq!(request_text(8, &d), r#"{"op":8,"d":{"guild_id":["1"],"query":"al","limit":10,"presences":true}}"#);
     }
 
     #[test]
@@ -2253,6 +2365,24 @@ mod tests {
             [(None, vec![Snowflake(5), Snowflake(6)]), (Some(Snowflake(12)), vec![Snowflake(7)])],
             "one with no emoji is left out"
         );
+    }
+
+    #[test]
+    fn an_apps_form_opens_with_or_without_our_nonce_and_a_web_page_doesnt() {
+        let state = fresh_state();
+        let form = json!({"id": "70", "channel_id": "600", "custom_id": "feedback", "title": "Tell us",
+                          "application": {"id": "800", "name": "Formy"}, "components": []});
+        dispatch(&state, "INTERACTION_MODAL_CREATE", form.clone());
+        let Ok(Event::Modal(modal)) = state.try_recv() else { panic!("no modal") };
+        assert_eq!((modal.title.as_str(), modal.custom_id.as_str(), modal.nonce), ("Tell us", "feedback", None));
+        let mut ours = form;
+        ours["nonce"] = json!("71");
+        dispatch(&state, "INTERACTION_MODAL_CREATE", ours);
+        let Ok(Event::Modal(modal)) = state.try_recv() else { panic!("no modal") };
+        assert_eq!(modal.nonce, Some(Snowflake(71)));
+        dispatch(&state, "INTERACTION_IFRAME_MODAL_CREATE", json!({"id": "72", "nonce": "73", "iframe_path": "/x"}));
+        let Ok(Event::Interaction { nonce, outcome, .. }) = state.try_recv() else { panic!("no interaction") };
+        assert_eq!((nonce, outcome), (Snowflake(73), Outcome::Form));
     }
 
     #[test]

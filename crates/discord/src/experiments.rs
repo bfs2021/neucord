@@ -3,7 +3,7 @@
 //! from the client's code, so the client's own definitions say what a
 //! variant means, and only READY says which one applies.
 //!
-//! READY carries three kinds. Apex experiments (50258) are assigned by
+//! READY carries three kinds. Apex experiments (340344) are assigned by
 //! Discord per user, install or server, keyed by murmur3 of the name. Older
 //! user experiments (343446) are assigned buckets. Older server experiments
 //! (343446) arrive as rollout rules, which the client evaluates itself for
@@ -375,7 +375,7 @@ impl Experiments {
     }
 
     /// Our own Apex assignments, as the client keeps them between launches
-    /// (the persisted `ApexExperimentStore`, 50258), in READY's layout.
+    /// (the persisted `ApexExperimentStore`, 340344), in READY's layout.
     pub fn user_cache(&self, me: Snowflake) -> Vec<Value> {
         let Some(assignments) = self.apex.get(&(Self::USER, me.0.to_string())) else { return Vec::new() };
         let mut cached: Vec<_> = assignments.iter().map(|(hash, a)| (*hash, a.to_value(*hash))).collect();
@@ -393,19 +393,27 @@ impl Experiments {
 
     /// Fold in the assignments of a `STATE_UPDATE`: each unit's entry is
     /// replaced whole and the rest stays, as the client's
-    /// `setExperimentAssignments` does (50258).
+    /// `setExperimentAssignments` does (340344).
     pub fn apply_update(&mut self, update: Experiments) {
         self.apex.extend(update.apex);
     }
 
     /// Our Apex assignment for a user experiment, or `None` for its default
     /// config, as the client's `getConfig` decides.
+    ///
+    /// The client's store also has a launch latch (`resolveConfigAssignment`
+    /// in 340344), which can hold an assignment flagged as app-launch to the
+    /// one the last launch saw. It reads only where the installation's
+    /// variant of the experiment that switches it says so; with no
+    /// installation id, the case Neucord is in (it keeps none, see
+    /// `IDENTITY.md`), its flags are the default, which only record. So the
+    /// assignment is the one READY or a `STATE_UPDATE` brought.
     pub fn apex_user(&self, me: Snowflake, name: &str) -> Option<&Assignment> {
         self.apex_assignment(Self::USER, &me.0.to_string(), name).filter(|a| !a.use_as_eligibility())
     }
 
     /// A server's Apex assignment for a server experiment: only for a user
-    /// Discord made eligible, unless forced (50258's
+    /// Discord made eligible, unless forced (340344's
     /// `getEvaluationAndAssignment`).
     pub fn apex_guild(&self, me: Snowflake, guild: Snowflake, name: &str) -> Option<&Assignment> {
         let user = self.apex_assignment(Self::USER, &me.0.to_string(), name)?;
@@ -457,12 +465,12 @@ impl Experiments {
     }
 }
 
-/// Debug aid for the weekly check: with `NEUCORD_DEBUG_EXPERIMENTS=<dir>`,
+/// Debug aid: with `NEUCORD_DEBUG_EXPERIMENTS=<dir>`,
 /// READY writes `<dir>/experiments.txt`, every assignment and rollout with the
 /// names listed in `<dir>/names.txt` (one a line, from the client's
 /// definitions) put to their hashes, and `<dir>/ready-shape.txt`, READY's
 /// [`outline`](crate::shape::outline). Neither holds our user id; the first
-/// names our servers by id, for a local diff week to week.
+/// names our servers by id.
 pub(crate) fn debug_dump(ready: &Value, experiments: &Experiments, me: Snowflake, guilds: &[Guild]) {
     let Some(dir) = std::env::var_os("NEUCORD_DEBUG_EXPERIMENTS").map(std::path::PathBuf::from) else { return };
     let names: Vec<String> = std::fs::read_to_string(dir.join("names.txt"))
@@ -577,6 +585,21 @@ mod tests {
         assert_eq!(experiments.apex_user(ME, "2099-01-eligible-only"), None);
         // Someone else's assignments aren't ours.
         assert_eq!(experiments.apex_user(Snowflake(11), "2099-01-on"), None);
+    }
+
+    #[test]
+    fn an_app_launch_assignment_reads_as_it_came() {
+        // 16 is `IsAppLaunch`: with no installation id the launch latch only
+        // records, so a new session's variant is the one that applies.
+        let launch = |variant: i64| {
+            ready(json!({ "1": { "10": { "assignments": [
+            [murmur3("2099-01-launch"), variant, 16, 1],
+        ] } } }))
+        };
+        let mut experiments = Experiments::from_ready(&launch(1));
+        assert_eq!(experiments.apex_user(ME, "2099-01-launch").map(|a| a.variant), Some(1));
+        experiments.apply_update(Experiments::from_ready(&launch(2)));
+        assert_eq!(experiments.apex_user(ME, "2099-01-launch").map(|a| a.variant), Some(2));
     }
 
     #[test]

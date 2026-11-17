@@ -1,8 +1,8 @@
 //! Counting what the account uses, and saving the counts as the client does
 //! (module 416380): emoji sent and reacted with, stickers sent, servers and
-//! channels opened. Slash commands, apps and sounds, which the client counts
-//! too, have no surface here. What is counted waits as pending, on disk
-//! so a closed app keeps it, until a save of the second settings proto
+//! channels opened, commands run and their apps. Sounds, which the client
+//! counts too, have no surface here. What is counted waits as pending, on
+//! disk so a closed app keeps it, until a save of the second settings proto
 //! carries it (see [`discord::usage`]).
 //!
 //! The client looks at its pending uses 10 ms to 10 s after connecting, every
@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use discord::Snowflake;
+use discord::commands::{Command, Used};
 use gtk::glib;
 
 use super::App;
@@ -142,6 +143,20 @@ impl App {
         self.persist_usage();
     }
 
+    /// `command` is being run where `guild` is: every run counts here, and
+    /// only here, before anything is sent (`APPLICATION_COMMAND_USED`, which
+    /// `A` in 545152 dispatches before it reopens a thread or sends; an
+    /// autocomplete counts nothing).
+    pub(super) fn command_used(&self, command: &Command, guild: Option<Snowflake>) {
+        self.account.state.borrow_mut().frecency.stores.command_used(command, guild, now_ms() as u64);
+        self.persist_usage();
+    }
+
+    /// How much each command is used now.
+    pub(super) fn command_use(&self) -> Used {
+        self.account.state.borrow_mut().frecency.stores.command_use(now_ms() as u64)
+    }
+
     /// The connection is open, or resumed (`POST_CONNECTION_OPEN`).
     pub(super) fn usage_connected(self: &Rc<Self>) {
         self.account.state.borrow_mut().usage_active = true;
@@ -176,7 +191,7 @@ impl App {
         });
     }
 
-    /// `R` in 416380: look again later, load the proto if something waits
+    /// `L` in 416380: look again later, load the proto if something waits
     /// for it, then ask for a save. `first` is the look after connecting,
     /// which servers and channels alone don't make load the proto.
     fn usage_look(self: &Rc<Self>, first: bool) {

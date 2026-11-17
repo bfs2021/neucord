@@ -29,7 +29,7 @@ pub enum Surface {
 }
 
 /// The experiment that redesigns the panel beside a DM, and with it what
-/// the panel asks for: the variant that enables it is 1 (`rD` in 289287).
+/// the panel asks for: the variant that enables it is 1 (`rD` in 420018).
 const SIDEBAR_REDESIGN: &str = "2026-06-user-profile-sidebar-redesign";
 
 /// Whether Discord gave the account the redesigned panel.
@@ -38,7 +38,7 @@ pub fn sidebar_redesign(experiments: &Experiments, me: Snowflake) -> bool {
 }
 
 /// A profile asked for, as the client puts it: the query and what goes in it
-/// (`342296` for a popout, `ok` in 289287 for the panel).
+/// (`342296` for a popout, `ok` in 420018 for the panel).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Request {
     pub surface: Surface,

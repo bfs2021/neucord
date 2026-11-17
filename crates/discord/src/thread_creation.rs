@@ -15,9 +15,11 @@ use crate::verification::Account;
 /// (what `Tv` in 747926 is given).
 pub const FROM_ATTACH_MENU: &str = "Plus Button";
 pub const FROM_MESSAGE_MENU: &str = "Message";
+/// `location` of /thread's request (12115).
+pub const FROM_SLASH_COMMAND: &str = "Slash Command";
 
 /// The longest name the client's name box takes, in UTF-16 units (`rm` in
-/// 289287).
+/// 420018).
 pub const NAME_MAX: usize = 100;
 
 /// What the name box shows where nothing is typed (`Nb2/RE`), and what a
@@ -118,6 +120,18 @@ pub fn body(parent: &Channel, name: &str, private: bool, location: &str) -> Valu
     })
 }
 
+/// What /thread sends (`Nw` in 971389, from 12115): always a public thread
+/// (`PUBLIC_THREAD`, even under an announcement channel, where the form
+/// asks for an announcement thread), in `channel`, the one the box is in.
+pub fn slash_body(channel: &Channel, name: &str) -> Value {
+    json!({
+        "name": name,
+        "type": PUBLIC_THREAD,
+        "auto_archive_duration": channel.default_auto_archive_duration.unwrap_or(AUTO_ARCHIVE_FALLBACK),
+        "location": FROM_SLASH_COMMAND,
+    })
+}
+
 /// Why the client turns the form back before sending anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Missing {
@@ -125,7 +139,7 @@ pub enum Missing {
     Message,
 }
 
-/// What the form lacks (`submit` in 289287): a name where the thread isn't
+/// What the form lacks (`submit` in 420018): a name where the thread isn't
 /// from a message, and something to say, text, a sticker or a file. A name
 /// of spaces counts as empty here, though it is sent as it is.
 pub fn missing(from_message: bool, name: &str, text: &str, has_more: bool) -> Vec<Missing> {
@@ -247,6 +261,14 @@ impl Refused {
             _ => Self::Other,
         }
     }
+
+    /// Whether /thread's refusal shows an alert: `Y` in 971389 alone
+    /// handles it there, which says nothing of slowmode (it only records
+    /// the cooldown) and rethrows AutoMod's and a refused name's unseen.
+    /// Either way the command stays in the box.
+    pub fn alerts_after_slash_command(&self) -> bool {
+        matches!(self, Self::TooManyThreads | Self::TooManyAnnouncementThreads | Self::RateLimited | Self::Other)
+    }
 }
 
 #[cfg(test)]
@@ -258,7 +280,7 @@ mod tests {
     const ME: Snowflake = Snowflake(5);
 
     fn me() -> Account {
-        Account { id: ME, verified: true, email: true, phone: false, mfa: false }
+        Account { id: ME, verified: true, email: true, phone: false, mfa: false, nsfw_allowed: false }
     }
 
     /// A server where @everyone has `granted`, and a channel of `kind`.
@@ -396,5 +418,28 @@ mod tests {
         assert_eq!(refused(400, r#"{"code": 50035, "errors": {"auto_archive_duration": {}}}"#), Refused::Other);
         assert_eq!(refused(500, "oops"), Refused::Other);
         assert_eq!(Refused::from(&Error::Captcha), Refused::Other);
+    }
+
+    #[test]
+    fn a_slash_thread_is_public_with_its_location() {
+        let channel = |kind, archive: serde_json::Value| -> Channel {
+            serde_json::from_value(json!({"id": "9", "type": kind, "default_auto_archive_duration": archive})).unwrap()
+        };
+        assert_eq!(
+            slash_body(&channel(0, json!(1440)), "Plans"),
+            json!({"name": "Plans", "type": 11, "auto_archive_duration": 1440, "location": "Slash Command"})
+        );
+        // Public under an announcement channel too, unlike the form's.
+        let news = slash_body(&channel(5, json!(null)), "n");
+        assert_eq!((&news["type"], &news["auto_archive_duration"]), (&json!(11), &json!(4320)));
+    }
+
+    #[test]
+    fn slash_thread_refusals_read_as_y() {
+        let alerts = |refused: Refused| refused.alerts_after_slash_command();
+        assert!(alerts(Refused::TooManyThreads) && alerts(Refused::TooManyAnnouncementThreads));
+        assert!(alerts(Refused::RateLimited) && alerts(Refused::Other));
+        assert!(!alerts(Refused::Slowmode(5)), "only the cooldown");
+        assert!(!alerts(Refused::AutoMod { title: true, reason: None }) && !alerts(Refused::Name), "rethrown unseen");
     }
 }

@@ -31,6 +31,7 @@ I'm trying to get as close as possible to Discord - feature-wise, as well as beh
 - libsoup 3
 - WebKitGTK 6.0, for captchas
 - GtkSourceView 5, to highlight code
+- libspelling, and a dictionary enchant can use (such as Hunspell's), to check spelling
 - GStreamer with its Opus and PipeWire plugins, to record voice messages
 - libsecret, and a Secret Service provider such as GNOME Keyring or KWallet
 - OpenSSL
@@ -39,7 +40,7 @@ I'm trying to get as close as possible to Discord - feature-wise, as well as beh
 On Arch Linux:
 
 ```sh
-sudo pacman -S --needed rust gtk4 libadwaita libsoup3 webkitgtk-6.0 gtksourceview5 gst-plugins-base gst-plugin-pipewire libsecret openssl
+sudo pacman -S --needed rust gtk4 libadwaita libsoup3 webkitgtk-6.0 gtksourceview5 libspelling hunspell hunspell-en_us gst-plugins-base gst-plugin-pipewire libsecret openssl
 ```
 
 ## Building
@@ -108,8 +109,10 @@ the embed's own, and a server folder's colour is the one set on your account.
 
 Neucord connects only to Discord's API, gateway and CDN, and to hCaptcha
 when Discord asks for a captcha. Captchas run in a private web view that
-keeps nothing once it closes. There are no analytics, no crash reporting,
-and none of the tracking calls the official client makes. It identifies
+keeps nothing once it closes. There are no analytics and no crash
+reporting. Of the calls the official client makes only to report what you
+do, Neucord makes one, as the client does with every pick: which GIF picker
+result you picked, for which search (`POST /gifs/select`). It identifies
 itself to Discord as Neucord instead of impersonating the official client.
 What it says about itself, and why: [IDENTITY.md](IDENTITY.md).
 

@@ -240,7 +240,7 @@ impl Notifications {
 
 /// Whether the notification settings offer "A server has an upcoming event":
 /// the client shows the toggle for variants 1 to 3 of the user experiment
-/// `2026-04-upcoming-server-event` and hides it otherwise (960111).
+/// `2026-04-upcoming-server-event` and hides it otherwise (212909).
 pub fn upcoming_event_toggle(experiments: &crate::experiments::Experiments, me: Snowflake) -> bool {
     experiments.apex_user(me, "2026-04-upcoming-server-event").is_some_and(|a| (1..=3).contains(&a.variant))
 }
@@ -479,7 +479,7 @@ impl Privacy {
 }
 
 /// What "Direct Messages" says: its title, and under it where it applies
-/// (`vx` and its subtitle in 960111, `b` in 632038). With only server members
+/// (`vx` and its subtitle in 212909, `b` in 632038). With only server members
 /// allowed to send friend requests the one switch is for both. `server` is
 /// none for the account's defaults, else whether the server is a hub.
 pub fn direct_messages_text(only_server_members: bool, server: Option<bool>) -> (&'static str, &'static str) {
@@ -494,7 +494,7 @@ pub fn direct_messages_text(only_server_members: bool, server: Option<bool>) -> 
     (title, note)
 }
 
-/// What is under "Message requests" (`vy` and its subtitle in 960111, `y` in
+/// What is under "Message requests" (`vy` and its subtitle in 212909, `y` in
 /// 632038), for a hub or not.
 pub fn message_requests_note(hub: bool) -> &'static str {
     if hub {
@@ -523,7 +523,7 @@ impl Privacy {
 
     /// "Message requests", on where messages from people we may not know are
     /// filtered into requests. The client turns it on for the accounts it must
-    /// (`useDisabled` and `useValue` of the row in 960111): it cannot be
+    /// (`useDisabled` and `useValue` of the row in 212909): it cannot be
     /// changed where direct messages are off, or by a teen where the region
     /// forces it, or with a parent linked.
     pub fn message_requests(&self, gates: &Gates, server: Option<Snowflake>) -> Row {
@@ -767,6 +767,14 @@ pub struct Settings {
     /// The skin tone emoji with tones show and send in; none is the default
     /// yellow.
     pub skin_tone: Option<Tone>,
+    /// `view_nsfw_commands`: age-restricted commands are offered in DMs and
+    /// group DMs.
+    pub nsfw_commands_in_dms: bool,
+    /// `enable_tts_command`, as the account set it; see [`Self::tts_command`].
+    pub enable_tts_command: Option<bool>,
+    /// `show_command_suggestions`, as the account set it; see
+    /// [`Self::command_suggestions`].
+    pub show_command_suggestions: Option<bool>,
 }
 
 /// The settings a payload mentions; the rest are `None`.
@@ -784,6 +792,9 @@ pub struct SettingsPatch {
     pub localization: Option<Option<String>>,
     /// `diversity_surrogate`: the tone, or none for the default.
     pub skin_tone: Option<Option<Tone>>,
+    pub nsfw_commands_in_dms: Option<bool>,
+    pub enable_tts_command: Option<bool>,
+    pub show_command_suggestions: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -823,6 +834,13 @@ impl Settings {
         if let Some(tone) = patch.skin_tone {
             self.skin_tone = tone;
         }
+        self.nsfw_commands_in_dms = patch.nsfw_commands_in_dms.unwrap_or(self.nsfw_commands_in_dms);
+        if patch.enable_tts_command.is_some() {
+            self.enable_tts_command = patch.enable_tts_command;
+        }
+        if patch.show_command_suggestions.is_some() {
+            self.show_command_suggestions = patch.show_command_suggestions;
+        }
     }
 
     /// Take `patch` as all of the settings, as a replacing protobuf is: what
@@ -830,6 +848,17 @@ impl Settings {
     pub fn replace(&mut self, patch: SettingsPatch) {
         *self = Settings::default();
         self.apply(patch);
+    }
+
+    /// /tts is offered (253932's `on`): unless the account turned it off.
+    pub fn tts_command(&self) -> bool {
+        self.enable_tts_command.unwrap_or(true)
+    }
+
+    /// A message starting with a bot's mention lists that bot's commands
+    /// (253932's `showCommandSuggestions`): unless the account turned it off.
+    pub fn command_suggestions(&self) -> bool {
+        self.show_command_suggestions.unwrap_or(true)
     }
 
     /// Our status is Do Not Disturb, which silences every notification.

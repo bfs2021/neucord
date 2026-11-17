@@ -6,7 +6,7 @@
 //! The requests are made only when [`Picker`] says so, and each is built here
 //! so that its query is the client's, field for field and in its order.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::cdn;
 use crate::frecency::{FavoriteGif, GifFormat, MAX_FAVORITE_GIFS_BYTES, favorite_gifs_size};
@@ -22,6 +22,17 @@ pub const SEARCH_DEBOUNCE_MS: u32 = 250;
 /// How many suggestions the client asks for.
 const SUGGESTIONS: u8 = 5;
 
+/// How long the GIF button pulses after a GIF is favourited, from any star:
+/// each favourite restarts it (`es` in 290153).
+pub const PULSE_MS: u32 = 2000;
+
+/// Whether "Added to Favorites" shows on the GIF button while it pulses,
+/// with the account holding `favorites` after the add: only for the first
+/// two (`es` in 290153).
+pub fn favorited_hint(favorites: usize) -> bool {
+    favorites <= 2
+}
+
 /// The results list asks for suggestions once it has scrolled to within this
 /// many pixels of its end, counted from the bottom of what is showing
 /// (`handleScroll` in 884037: `scrollHeight - scrollTop <= 1180`).
@@ -29,7 +40,7 @@ pub const NEAR_END: f64 = 1180.0;
 
 /// `encodeURIComponent`, which is how the client's HTTP layer writes a query
 /// value: everything but letters, digits and ``-_.!~*'()`` is escaped.
-fn component(value: &str) -> String {
+pub(crate) fn component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
@@ -70,8 +81,9 @@ impl Request {
 /// A GIF of the results, or a favourite.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gif {
-    /// The provider's id; none for a favourite.
-    pub id: String,
+    /// The provider's id as the answer gave it, a string or a number, which
+    /// a pick reports as it is (`id: o` in 821102); none for a favourite.
+    pub id: Option<Value>,
     /// The link a pick sends as the message, and Copy Link copies. A
     /// favourite is filed under it.
     pub url: String,
@@ -87,14 +99,13 @@ pub struct Gif {
 impl Gif {
     fn from_value(value: &Value) -> Option<Gif> {
         let id = match &value["id"] {
-            Value::String(id) => id.clone(),
-            Value::Number(id) => id.to_string(),
+            id @ (Value::String(_) | Value::Number(_)) => id.clone(),
             _ => return None,
         };
         let size = |field: &str| value[field].as_u64().unwrap_or(0) as u32;
         let src = value["src"].as_str()?.to_owned();
         Some(Gif {
-            id,
+            id: Some(id),
             url: value["url"].as_str()?.to_owned(),
             video: has_extension(&src, &["mp4", "webm"]),
             src,
@@ -112,7 +123,7 @@ impl Gif {
     /// A favourite, as the favourites list shows it.
     fn from_favorite(favorite: &FavoriteGif) -> Gif {
         Gif {
-            id: String::new(),
+            id: None,
             url: favorite.url.clone(),
             video: favorite.format == GifFormat::Video || has_extension(&favorite.src, &["mp4", "webm"]),
             src: favorite.src.clone(),
@@ -125,6 +136,21 @@ impl Gif {
     /// Where the animated preview comes from.
     pub fn preview(&self) -> String {
         preview_url(&self.src)
+    }
+
+    /// What a `/gif` result shows (`GIFIntegration`'s `src` in 496533): the
+    /// answer's `src`, or its `gif_src` where `src` is a video and `gif_src`
+    /// is something else (`r1`, 273185); none where what is left is a
+    /// video, which Neucord doesn't play. The link loads as the answer gives
+    /// it, `IntegrationQueryStore` keeping the answer raw: not the picker's
+    /// [`Self::preview`], whose rewrites would fetch another image.
+    pub fn command_preview(&self) -> Option<String> {
+        let shown = match self.gif_src.as_deref() {
+            Some(gif) if is_video(&self.src) && !gif.is_empty() && !is_video(gif) => gif,
+            _ => &self.src,
+        };
+        let shown = if shown.starts_with("//") { format!("https:{shown}") } else { shown.to_owned() };
+        (!is_video(&shown)).then_some(shown)
     }
 
     /// Whether the account has it as a favourite.
@@ -150,7 +176,7 @@ impl Gif {
 }
 
 /// What a star on a GIF hands `wg` (497685): the picker's results, and a GIF
-/// of a message (`b` in 343552 for an embed's, `cM` in 679636 for an
+/// of a message (`b` in 343552 for an embed's, `cO` in 190854 for an
 /// attachment's).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Starred {
@@ -200,7 +226,7 @@ impl Starred {
         is_favorite(favorites, &self.url)
     }
 
-    /// The star on an attachment (`cM`, 679636): one the proxy serves as a
+    /// The star on an attachment (`cO`, 190854): one the proxy serves as a
     /// GIF, or as a WebP or AVIF flagged animated, and that has a size. The
     /// proxied link is the picture, and the attachment's own the link.
     pub fn attachment(attachment: &crate::Attachment) -> Option<Starred> {
@@ -297,11 +323,102 @@ fn names(url: &str, extensions: &[&str], ends: &[char]) -> bool {
 
 /// An image the client shows from an answer: the store strips the scheme
 /// (`g`, 821102), so it loads over the page's own, and Discord's media
-/// proxy is asked to keep it animated (`F`, 884037).
+/// proxy is asked to keep it animated (`b`, 884037).
 fn preview_url(src: &str) -> String {
     let without = src.strip_prefix("https:").or_else(|| src.strip_prefix("http:")).unwrap_or(src);
     let url = if without.starts_with("//") { format!("https:{without}") } else { without.to_owned() };
     cdn::animated(&url)
+}
+
+/// `r1` in 273185: what comes before the first `?` ends as a video's
+/// file does, as the desktop app counts them.
+fn is_video(url: &str) -> bool {
+    let path = url.split('?').next().unwrap_or_default().to_ascii_lowercase();
+    [".mp4", ".webm", ".mov", ".qt"].iter().any(|e| path.ends_with(e))
+}
+
+/// The query of `/gif`'s search (`eb` in 496533), in its field order: a
+/// fixed format and count, not the picker's.
+pub fn command_query(query: &str) -> String {
+    format!("q={}&media_format=webp&locale={LOCALE}&limit=20", component(query))
+}
+
+/// How long `/gif` waits after the last change of its query before it
+/// searches (`eb`: trailing only).
+pub const COMMAND_DEBOUNCE_MS: u32 = 300;
+
+/// What a `/gif` query has come to.
+#[derive(Clone, Debug, PartialEq)]
+enum Searched {
+    Loading,
+    Answered(Vec<Gif>),
+}
+
+/// `/gif`'s searches (`IntegrationQueryStore` and `ej`, `eb` in 496533):
+/// one debounce for the whole session, which nothing cancels and the last
+/// query re-arms; each query's answer kept for the session; a query asked
+/// once at a time; a failed one forgotten, so typing it asks again.
+#[derive(Debug, Default)]
+pub struct CommandSearches {
+    searched: std::collections::HashMap<String, Searched>,
+    in_flight: std::collections::HashSet<String>,
+    /// What the debounce sends when it runs out.
+    armed: Option<String>,
+}
+
+/// What `/gif`'s results show for its query.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CommandShown<'a> {
+    /// No query, no answer yet asked for, or an empty or failed one.
+    Nothing,
+    /// A spinner alone.
+    Loading,
+    Gifs(&'a [Gif]),
+}
+
+impl CommandSearches {
+    /// The query option now holds `text`. Whether to (re)start the
+    /// debounce: for a query, trimmed, that isn't empty and isn't answered.
+    /// When it says no, a debounce already running goes on with its query.
+    pub fn typed(&mut self, text: &str) -> bool {
+        let query = text.trim();
+        if query.is_empty() || matches!(self.searched.get(query), Some(Searched::Answered(_))) {
+            return false;
+        }
+        self.searched.entry(query.to_owned()).or_insert(Searched::Loading);
+        self.armed = Some(query.to_owned());
+        true
+    }
+
+    /// The debounce ran out: the query to search now, unless that one is
+    /// being asked already.
+    pub fn fire(&mut self) -> Option<String> {
+        let query = self.armed.take()?;
+        self.in_flight.insert(query.clone()).then_some(query)
+    }
+
+    /// The answer to `query`; none when the search failed.
+    pub fn answered(&mut self, query: &str, gifs: Option<Vec<Gif>>) {
+        self.in_flight.remove(query);
+        match gifs {
+            Some(gifs) => {
+                self.searched.insert(query.to_owned(), Searched::Answered(gifs));
+            }
+            None => {
+                self.searched.remove(query);
+            }
+        }
+    }
+
+    /// What shows while the query option holds `text`: an empty query is
+    /// never searched, so it shows nothing.
+    pub fn shown(&self, text: &str) -> CommandShown<'_> {
+        match self.searched.get(text.trim()) {
+            Some(Searched::Loading) => CommandShown::Loading,
+            Some(Searched::Answered(gifs)) if !gifs.is_empty() => CommandShown::Gifs(gifs),
+            _ => CommandShown::Nothing,
+        }
+    }
 }
 
 /// What a front page tile opens.
@@ -540,6 +657,14 @@ impl Picker {
         self.gifs = Some(gifs.unwrap_or_default());
     }
 
+    /// What a pick of `gif` reports (`g4` in 497685, from `selectItem` in
+    /// 884037, Shift or not, whatever becomes of the message): its id and the
+    /// search the shown results answer, `""` for Trending. A GIF without an
+    /// id, a favourite, reports nothing.
+    pub fn selection(&self, gif: &Gif) -> Option<Value> {
+        Some(json!({"id": gif.id.clone()?, "q": self.result_query}))
+    }
+
     /// The answer to the trending request.
     pub fn answered_trending(&mut self, gifs: Option<Vec<Gif>>) {
         if self.page == Some(Kind::TrendingGifs) {
@@ -589,6 +714,98 @@ mod tests {
     }
 
     #[test]
+    fn the_command_search_has_the_clients_query_in_its_order() {
+        assert_eq!(command_query("cats"), "q=cats&media_format=webp&locale=en-US&limit=20");
+        assert_eq!(command_query("a b&c"), "q=a%20b%26c&media_format=webp&locale=en-US&limit=20");
+    }
+
+    #[test]
+    fn a_command_search_waits_and_goes_once_per_query() {
+        let mut searches = CommandSearches::default();
+        assert!(searches.typed("cat"));
+        assert_eq!(searches.shown("cat"), CommandShown::Loading);
+        assert_eq!(searches.fire().as_deref(), Some("cat"));
+        assert_eq!(searches.fire(), None, "nothing armed");
+        // Typed again while it is asked: armed, but not asked twice at once.
+        assert!(searches.typed("cat"));
+        assert_eq!(searches.fire(), None);
+        searches.answered("cat", Some(vec![gif("1")]));
+        assert_eq!(searches.shown(" cat "), CommandShown::Gifs(&[gif("1")]));
+        assert!(!searches.typed("cat"), "answered for the session");
+    }
+
+    #[test]
+    fn a_query_typed_over_stays_waiting_until_typed_again() {
+        let mut searches = CommandSearches::default();
+        for typed in ["c", "ca", "cat"] {
+            assert!(searches.typed(typed));
+        }
+        assert_eq!(searches.fire().as_deref(), Some("cat"), "the last one");
+        assert_eq!(searches.shown("ca"), CommandShown::Loading, "never asked");
+        assert!(searches.typed("ca"));
+        assert_eq!(searches.fire().as_deref(), Some("ca"));
+        // An answered query typed leaves a running debounce alone.
+        searches.answered("cat", Some(vec![gif("1")]));
+        assert!(searches.typed("dog"));
+        assert!(!searches.typed("cat"));
+        assert_eq!(searches.fire().as_deref(), Some("dog"));
+    }
+
+    #[test]
+    fn a_failed_command_search_is_forgotten() {
+        let mut searches = CommandSearches::default();
+        searches.typed("cat");
+        searches.fire();
+        searches.answered("cat", None);
+        assert_eq!(searches.shown("cat"), CommandShown::Nothing);
+        assert!(searches.typed("cat"), "asked again");
+        assert_eq!(searches.fire().as_deref(), Some("cat"));
+    }
+
+    #[test]
+    fn the_command_query_is_trimmed_and_empty_shows_nothing() {
+        let mut searches = CommandSearches::default();
+        assert!(!searches.typed("   "));
+        assert_eq!(searches.fire(), None);
+        assert_eq!(searches.shown(""), CommandShown::Nothing);
+        assert!(searches.typed("  cat "));
+        assert_eq!(searches.fire().as_deref(), Some("cat"));
+        searches.answered("cat", Some(Vec::new()));
+        assert_eq!(searches.shown("cat"), CommandShown::Nothing, "an empty answer");
+    }
+
+    fn command_result(src: &str, gif_src: Option<&str>) -> Gif {
+        let mut answer = json!({"id": "1", "url": "https://example.test/view/1", "src": src});
+        if let Some(gif_src) = gif_src {
+            answer["gif_src"] = json!(gif_src);
+        }
+        Gif::list(&json!([answer])).remove(0)
+    }
+
+    #[test]
+    fn a_video_result_shows_its_gif_instead() {
+        let webp = "https://example.test/a.webp";
+        for video in ["https://example.test/a.mp4", "https://example.test/a.MOV", "https://example.test/a.webm?x=1"] {
+            assert_eq!(command_result(video, Some(webp)).command_preview().as_deref(), Some(webp), "{video}");
+            assert_eq!(command_result(video, Some("https://example.test/b.mp4")).command_preview(), None);
+            assert_eq!(command_result(video, Some("")).command_preview(), None);
+            assert_eq!(command_result(video, None).command_preview(), None);
+        }
+        let named = "https://example.test/x.mp4.webp";
+        assert_eq!(command_result(named, Some(webp)).command_preview().as_deref(), Some(named), "no video");
+    }
+
+    #[test]
+    fn a_command_result_loads_as_the_answer_gives_it() {
+        let proxied = "https://media.discordapp.net/external/abc/a.webp";
+        assert_eq!(command_result(proxied, None).command_preview().as_deref(), Some(proxied), "not made animated");
+        assert_eq!(
+            command_result("//example.test/a.webp", None).command_preview().as_deref(),
+            Some("https://example.test/a.webp")
+        );
+    }
+
+    #[test]
     fn each_request_has_the_clients_query_in_its_order() {
         assert_eq!(Request::Trending.query(), "locale=en-US&media_format=tinywebp");
         assert_eq!(Request::TrendingGifs.query(), "media_format=tinywebp&locale=en-US");
@@ -609,7 +826,7 @@ mod tests {
             {"id": 8, "url": "https://example.test/view/8", "src": "https://example.test/8.webp"},
             {"id": "9", "src": "//example.test/9.webp"},
         ]));
-        assert_eq!(gifs.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["7", "8"]);
+        assert_eq!(gifs.iter().map(|g| g.id.clone()).collect::<Vec<_>>(), [Some(json!("7")), Some(json!(8))]);
         assert_eq!(gifs[0].url, "https://example.test/view/7");
         assert_eq!(gifs[0].preview(), "https://example.test/7.webp");
         assert_eq!(gifs[1].preview(), "https://example.test/8.webp");
@@ -718,6 +935,61 @@ mod tests {
         picker.typed("cat");
         picker.answered("cat", Some(vec![gif("1")]));
         assert!(matches!(picker.screen(), Screen::Results { suggestions, .. } if suggestions.is_empty()));
+    }
+
+    #[test]
+    fn a_pick_reports_the_gifs_id_and_the_search_its_results_answer() {
+        let mut picker = Picker::default();
+        picker.typed("cat");
+        picker.answered("cat", Some(vec![gif("7")]));
+        // In the client's field order.
+        assert_eq!(picker.selection(&gif("7")).unwrap().to_string(), r#"{"id":"7","q":"cat"}"#);
+        // A search still waiting leaves the shown results, and what they answer.
+        picker.typed("dog");
+        assert_eq!(picker.selection(&gif("7")), Some(json!({"id": "7", "q": "cat"})));
+
+        let tiles = Tiles::parse(&json!({
+            "categories": [{"name": "happy", "src": "//example.test/h.webp"}],
+            "gifs": [{"id": "1", "url": "u", "src": "//example.test/t.webp"}],
+        }));
+        picker.clear();
+        picker.open(&tiles[1]);
+        picker.answered("happy", Some(vec![gif("1")]));
+        assert_eq!(picker.selection(&gif("1")), Some(json!({"id": "1", "q": "happy"})));
+
+        // A suggestion starts over, as `handleSelectSuggestion` does.
+        picker.clear();
+        picker.searched("kitten", Kind::Search);
+        picker.answered("kitten", Some(vec![gif("2")]));
+        assert_eq!(picker.selection(&gif("2")), Some(json!({"id": "2", "q": "kitten"})));
+
+        picker.clear();
+        picker.open(&tiles[0]);
+        picker.answered_trending(Some(vec![gif("3")]));
+        assert_eq!(picker.selection(&gif("3")), Some(json!({"id": "3", "q": ""})));
+    }
+
+    #[test]
+    fn the_favourited_hint_is_for_the_first_two_favourites() {
+        assert!([0, 1, 2].into_iter().all(favorited_hint));
+        assert!(!favorited_hint(3) && !favorited_hint(100));
+    }
+
+    #[test]
+    fn a_numeric_id_goes_back_as_a_number() {
+        let mut picker = Picker::default();
+        picker.typed("cat");
+        let gifs = Gif::list(&json!([{"id": 8, "url": "https://example.test/view/8", "src": "//example.test/8.webp"}]));
+        picker.answered("cat", Some(gifs.clone()));
+        assert_eq!(picker.selection(&gifs[0]).unwrap().to_string(), r#"{"id":8,"q":"cat"}"#);
+    }
+
+    #[test]
+    fn a_favourite_reports_nothing() {
+        let mut picker = Picker::default();
+        picker.favorites();
+        let listed = favorites_for(&[held("https://example.test/view/1", 1)], "");
+        assert_eq!(picker.selection(&listed[0]), None);
     }
 
     fn result(src: &str, gif_src: &str) -> Gif {

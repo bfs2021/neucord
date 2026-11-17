@@ -5,14 +5,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use adw::prelude::*;
+use discord::chat_bar::{self, Bar, Prefs};
+use discord::command_line::Header;
 use discord::cooldowns::{Slowmode, bypasses_slowmode, wait_words};
 use discord::emoji::{Intention, Item as Emoji, locked_notice};
 use discord::limits::{LengthCount, TooLong, message_length};
+use discord::mention_list::{self, Global};
 use discord::notice::Notice;
 use discord::rest::{Reply, ReplyPing};
 use discord::scheduled;
 use discord::verification::Gate;
-use discord::{Channel, Message, Snowflake};
+use discord::{Channel, ChannelKind, Message, Snowflake};
 use gtk::glib;
 
 use super::App;
@@ -20,6 +23,41 @@ use super::chat::MessageTarget;
 use super::menus::{self, Entry, Item, Kind};
 use super::state::{now_ms, now_unix};
 use super::uploads::{Outgoing, Stopped};
+use crate::config;
+
+/// The message box's menu: its Suggestions submenu (194400's
+/// `suggestions`), which shows while it has something in it.
+pub(super) const SUGGESTIONS: Entry<()> = Entry::Item(Item {
+    name: "suggestions",
+    label: "S_uggestions",
+    shows: |_, _| true,
+    kind: Kind::Submenu(&[&[COMMAND_SUGGESTIONS]]),
+});
+
+/// Its Slash Commands (`command-suggestions`): whether a message starting
+/// with a bot's mention lists the bot's commands, a setting of the
+/// account's. The client's edit box takes no commands, and has none.
+const COMMAND_SUGGESTIONS: Entry<()> = Entry::Item(Item {
+    name: "command-suggestions",
+    label: "Slash _Commands",
+    shows: |app, _| app.editing().is_none(),
+    kind: Kind::Check {
+        checked: |app, _| app.account.state.borrow().settings.command_suggestions(),
+        set: |app, _, on| app.change_setting(discord::Setting::ShowCommandSuggestions(on)),
+    },
+});
+
+/// The message box's menu: whether the send button shows (194400's
+/// `submit-button`). The client's edit box has none.
+pub(super) const SEND_BUTTON: Entry<()> = Entry::Item(Item {
+    name: "send-button",
+    label: "_Send Message Button",
+    shows: |app, _| app.editing().is_none(),
+    kind: Kind::Check {
+        checked: |app, _| app.config.get(&config::SEND_BUTTON),
+        set: |app, _, on| app.set_send_button(on),
+    },
+});
 
 /// Reply to a message from its menu; Shift turns the ping off, as with the
 /// button.
@@ -79,8 +117,24 @@ impl LengthIndicator {
 pub(super) enum Completion {
     Mention(u64, String),
     Emoji(Emoji),
-    /// A command to fill in the form of, not text to insert.
+    /// A command to put in the box, not text to insert.
     Command(super::slash::Suggestion),
+    /// An option of the command in the box, to add a pill for.
+    Option {
+        name: String,
+        display_name: String,
+        description: String,
+    },
+    /// A choice for a pill, by the name it shows.
+    Choice(String),
+    Role(Snowflake, String),
+    Channel(Snowflake, String),
+    /// `@everyone`, for a role or mentionable pill, or in the box.
+    Everyone,
+    /// `@here`, in the box.
+    Here,
+    /// A line that can't be picked: loading, a failure, nothing found.
+    Status(String),
 }
 
 impl Completion {
@@ -88,39 +142,62 @@ impl Completion {
     fn text(&self) -> String {
         match self {
             Completion::Mention(id, _) => format!("<@{id}> "),
+            Completion::Role(id, _) => format!("<@&{id}> "),
+            Completion::Everyone => "@everyone ".to_owned(),
+            Completion::Here => "@here ".to_owned(),
             Completion::Emoji(item) => format!("{} ", item.text()),
-            Completion::Command(_) => String::new(),
+            _ => String::new(),
+        }
+    }
+
+    /// What its row says first.
+    pub(super) fn label(&self) -> String {
+        match self {
+            Completion::Mention(_, name) | Completion::Role(_, name) => format!("@{name}"),
+            Completion::Emoji(item) => format!(":{}:", item.name()),
+            Completion::Command(suggestion) => suggestion.name.clone(),
+            Completion::Option { display_name, .. } => display_name.clone(),
+            Completion::Choice(name) | Completion::Status(name) => name.clone(),
+            Completion::Channel(_, name) => format!("#{name}"),
+            Completion::Everyone => "@everyone".to_owned(),
+            Completion::Here => "@here".to_owned(),
         }
     }
 
     fn row(&self, images: &crate::images::Images) -> gtk::Widget {
+        let described = |name: &str, description: &str| {
+            let line = gtk::Box::builder().spacing(12).build();
+            line.append(&gtk::Label::builder().label(name).xalign(0.0).build());
+            line.append(
+                &gtk::Label::builder()
+                    .label(description)
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .width_chars(30)
+                    .max_width_chars(48)
+                    .css_classes(["dim-label"])
+                    .build(),
+            );
+            line
+        };
         match self {
-            Completion::Mention(_, name) => {
-                gtk::Label::builder().label(format!("@{name}")).xalign(0.0).build().upcast()
-            }
             Completion::Emoji(item) => {
                 let line = gtk::Box::builder().spacing(8).build();
                 line.append(&super::emoji::glyph(item, images));
-                line.append(&gtk::Label::builder().label(format!(":{}:", item.name())).xalign(0.0).build());
+                line.append(&gtk::Label::builder().label(self.label()).xalign(0.0).build());
                 line.upcast()
             }
             Completion::Command(suggestion) => {
-                let line = gtk::Box::builder().spacing(12).build();
-                line.append(&gtk::Label::builder().label(&suggestion.name).xalign(0.0).build());
-                line.append(
-                    &gtk::Label::builder()
-                        .label(&suggestion.description)
-                        .xalign(0.0)
-                        .hexpand(true)
-                        .ellipsize(gtk::pango::EllipsizeMode::End)
-                        .width_chars(30)
-                        .max_width_chars(48)
-                        .css_classes(["dim-label"])
-                        .build(),
-                );
+                let line = described(&suggestion.name, &suggestion.description);
                 line.append(&gtk::Label::builder().label(&suggestion.app).css_classes(["dim-label"]).build());
                 line.upcast()
             }
+            Completion::Option { display_name, description, .. } => described(display_name, description).upcast(),
+            Completion::Status(text) => {
+                gtk::Label::builder().label(text).xalign(0.0).css_classes(["dim-label"]).build().upcast()
+            }
+            _ => gtk::Label::builder().label(self.label()).xalign(0.0).build().upcast(),
         }
     }
 }
@@ -130,12 +207,37 @@ pub(super) struct MentionCtx {
     /// Char offset of the `@` or `:` being completed.
     pub(super) start: i32,
     pub(super) candidates: Vec<Completion>,
+    /// Headers over the rows they start.
+    pub(super) headers: Vec<(usize, discord::command_line::Header)>,
+    /// The icon names beside some of those headers.
+    pub(super) icons: Vec<(usize, &'static str)>,
+    /// The pill of the command in the box a pick sets whole.
+    pub(super) pill: Option<String>,
+    /// When a row is selected by itself: [`Focus::Manual`] lists start with
+    /// none, and Enter then sends the message.
+    pub(super) focus: discord::commands::Focus,
+}
+
+impl MentionCtx {
+    /// How many rows can be picked; those that can't come last.
+    pub(super) fn selectable(&self) -> usize {
+        self.candidates.iter().filter(|c| !matches!(c, Completion::Status(_))).count()
+    }
 }
 
 impl App {
     /// The message box floating under the list, with its mention popup and keys.
     pub(super) fn build_composer(self: &Rc<Self>, area: &gtk::Box) {
-        menus::extend(self, &self.composer, menus::COMPOSER, || ());
+        menus::extend(
+            self,
+            &self.composer,
+            menus::COMPOSER,
+            || (),
+            |app, at| {
+                app.spelling_opening(at);
+                app.paste_opening();
+            },
+        );
         area.append(&self.composer_error);
         area.append(&self.notice_bar);
         self.reply_bar.append(&self.reply_label);
@@ -164,22 +266,44 @@ impl App {
         self.reply_bar.append(&cancel);
         area.append(&self.reply_bar);
         self.build_schedule_bar(area);
+        self.build_dice_bar(area);
         self.build_edit_bar(area);
         self.build_slash(area);
         self.build_attach(area);
         self.build_stickers(area);
         self.build_gifs();
+        self.composer_box.append(&self.slash.icon);
         self.composer_box.append(&self.composer);
+        self.composer_box.append(&self.slash.more);
         self.composer_box.append(&self.gif_button);
         self.composer_box.append(&self.sticker_button);
         self.composer_box.append(&self.emoji_button);
+        self.composer_box.append(&self.apps_button);
+        self.composer_box.append(&self.send_separator);
+        self.composer_box.append(&self.send_button);
         self.composer_box.append(&self.length.root);
+        self.send_button.connect_clicked({
+            let this = Rc::downgrade(self);
+            move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.submit();
+                }
+            }
+        });
         self.emoji_button.connect_clicked({
             let this = Rc::downgrade(self);
             move |button| {
                 let Some(this) = this.upgrade() else { return };
                 let Some(channel) = this.account.state.borrow().channel else { return };
                 this.open_emoji_picker(channel, button, Intention::Chat, |app, item| app.insert_emoji(item));
+            }
+        });
+        self.apps_button.connect_clicked({
+            let this = Rc::downgrade(self);
+            move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.toggle_launcher();
+                }
             }
         });
         self.build_voice();
@@ -195,6 +319,15 @@ impl App {
             .build();
         self.mention_popover.set_child(Some(&scroller));
         self.mention_popover.set_parent(&self.composer);
+        // Closed, the suggestions check no one ([`App::suggestions_closed`]).
+        self.mention_popover.connect_closed({
+            let this = Rc::downgrade(self);
+            move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.suggestions_closed();
+                }
+            }
+        });
         self.mention_list.connect_row_activated({
             let this = Rc::downgrade(self);
             move |_, row| {
@@ -206,79 +339,128 @@ impl App {
         self.composer.buffer().connect_changed({
             let this = Rc::downgrade(self);
             move |_| {
-                if let Some(this) = this.upgrade() {
-                    this.update_mention_popup();
-                    this.update_length_indicator();
-                    this.composer_typed();
+                let Some(this) = this.upgrade() else { return };
+                if this.slash.syncing.get() {
+                    return;
                 }
+                // A command's line is read again at the end of the user action, or once idle.
+                if this.slash.is_active() {
+                    if !this.slash.in_action.get() {
+                        this.queue_command_sync();
+                    }
+                } else {
+                    this.update_mention_popup();
+                    this.refresh_chat_bar();
+                }
+                this.composer_typed();
             }
         });
+        self.build_pills();
+        self.build_integrations();
 
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed({
             let this = Rc::downgrade(self);
-            move |_, key, _, modifiers| {
-                let Some(this) = this.upgrade() else { return glib::Propagation::Proceed };
-                use gtk::gdk::Key;
-                // While the mention popup is open, it owns the navigation keys.
-                if this.mention_popover.is_visible() {
-                    match key {
-                        Key::Escape => {
-                            this.mention_popover.popdown();
-                            return glib::Propagation::Stop;
-                        }
-                        Key::Down | Key::Tab => {
-                            this.move_mention_selection(1);
-                            return glib::Propagation::Stop;
-                        }
-                        Key::Up => {
-                            this.move_mention_selection(-1);
-                            return glib::Propagation::Stop;
-                        }
-                        Key::Return | Key::KP_Enter => {
-                            let index = this.mention_list.selected_row().map(|r| r.index()).unwrap_or(0);
-                            this.accept_mention(index);
-                            return glib::Propagation::Stop;
-                        }
-                        _ => {}
-                    }
-                }
-                if key == Key::Escape && this.editing().is_some() {
-                    this.end_edit();
-                    return glib::Propagation::Stop;
-                }
-                // Up alone in an empty box edits our last message, as in the official client.
-                let alone = !modifiers.intersects(gtk::accelerator_get_default_mod_mask());
-                if key == Key::Up && alone && this.composer.buffer().char_count() == 0 && this.edit_last() {
-                    return glib::Propagation::Stop;
-                }
-                if key == Key::Escape && this.reply.borrow().is_some() {
-                    this.set_reply(None);
-                    return glib::Propagation::Stop;
-                }
-                // The scheduled time goes after the reply, and a waiting sticker after it (92960).
-                let channel = this.account.state.borrow().channel;
-                if key == Key::Escape
-                    && let Some(channel) = channel.filter(|c| this.scheduled_time(*c).is_some())
-                {
-                    this.clear_schedule(channel);
-                    return glib::Propagation::Stop;
-                }
-                if key == Key::Escape
-                    && let Some(channel) = channel.filter(|c| this.waiting.of(*c).is_some())
-                {
-                    this.set_waiting_sticker(channel, None);
-                    return glib::Propagation::Stop;
-                }
-                let enter = matches!(key, Key::Return | Key::KP_Enter);
-                if enter && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
-                    this.send_composer();
-                    return glib::Propagation::Stop;
-                }
-                glib::Propagation::Proceed
+            move |_, key, _, modifiers| match this.upgrade() {
+                Some(this) => this.composer_key(key, modifiers),
+                None => glib::Propagation::Proceed,
             }
         });
         self.composer.add_controller(keys);
+    }
+
+    /// What a key pressed in the message box does, before the box's own
+    /// bindings.
+    pub(super) fn composer_key(
+        self: &Rc<Self>,
+        key: gtk::gdk::Key,
+        modifiers: gtk::gdk::ModifierType,
+    ) -> glib::Propagation {
+        use gtk::gdk::Key;
+        if self.slash.is_active()
+            && let Some(handled) = self.command_key(key, modifiers)
+        {
+            return handled;
+        }
+        // While the mention popup is open, it owns the navigation keys.
+        if self.mention_popover.is_visible() {
+            match key {
+                Key::Escape => {
+                    self.mention_popover.popdown();
+                    return glib::Propagation::Stop;
+                }
+                Key::Down | Key::Tab => {
+                    self.move_mention_selection(1);
+                    return glib::Propagation::Stop;
+                }
+                Key::Up => {
+                    self.move_mention_selection(-1);
+                    return glib::Propagation::Stop;
+                }
+                Key::Return | Key::KP_Enter => {
+                    let selected = self.mention_list.selected_row().map(|r| r.index());
+                    let manual = self.mention.borrow().focus == discord::commands::Focus::Manual;
+                    if selected.is_some() || !manual {
+                        self.accept_mention(selected.unwrap_or(0));
+                        return glib::Propagation::Stop;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if key == Key::Escape && self.editing().is_some() {
+            self.end_edit();
+            return glib::Propagation::Stop;
+        }
+        // Up alone in an empty box edits our last message, as in the official client.
+        let alone = !modifiers.intersects(gtk::accelerator_get_default_mod_mask());
+        if key == Key::Up && alone && self.composer.buffer().char_count() == 0 && self.edit_last() {
+            return glib::Propagation::Stop;
+        }
+        if key == Key::Escape && self.reply.borrow().is_some() {
+            self.set_reply(None);
+            return glib::Propagation::Stop;
+        }
+        // The scheduled time goes after the reply, and a waiting sticker after it (92960).
+        let channel = self.account.state.borrow().channel;
+        if key == Key::Escape
+            && let Some(channel) = channel.filter(|c| self.scheduled_time(*c).is_some())
+        {
+            self.clear_schedule(channel);
+            return glib::Propagation::Stop;
+        }
+        if key == Key::Escape
+            && let Some(channel) = channel.filter(|c| self.waiting.of(*c).is_some())
+        {
+            self.set_waiting_sticker(channel, None);
+            return glib::Propagation::Stop;
+        }
+        let enter = matches!(key, Key::Return | Key::KP_Enter);
+        if enter && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
+            self.submit();
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    }
+
+    /// What Enter in the message box does, and the send button: the
+    /// client's `submit`, which runs an active command.
+    pub(super) fn submit(self: &Rc<Self>) {
+        if self.slash.is_active() {
+            return self.run_command();
+        }
+        self.send_composer();
+    }
+
+    /// Show the send button or not, as chosen in the menu or Settings.
+    pub(super) fn set_send_button(self: &Rc<Self>, on: bool) {
+        match self.config.set(&config::SEND_BUTTON, on) {
+            Ok(()) => self.refresh_chat_bar(),
+            Err(e) => {
+                eprintln!("config: {e}");
+                self.toast("Could not save that option");
+            }
+        }
     }
 
     /// What replaces the message box where we can't post: accept and ignore
@@ -458,13 +640,9 @@ impl App {
         let ping = ReplyPing::for_click(own, guild.is_none(), no_ping);
         let fixed_ping = ping.fixed();
         self.reply_ping.set_active(ping.ping);
-        self.set_reply(Some(ReplyCtx {
-            channel: message.channel_id,
-            guild,
-            to: message.id,
-            author: self.account.state.borrow().name_in(message.channel_id, &message.author),
-            fixed_ping,
-        }));
+        // Not borrowed through the call: a reply can end a command, which asks for its index.
+        let author = self.account.state.borrow().name_in(message.channel_id, &message.author);
+        self.set_reply(Some(ReplyCtx { channel: message.channel_id, guild, to: message.id, author, fixed_ping }));
         self.composer.grab_focus();
     }
 
@@ -477,11 +655,18 @@ impl App {
         }
         self.reply_bar.set_visible(reply.is_some());
         let previous = self.reply.replace(reply.clone());
+        // A reply ends an app's command, keeping its text (`C` in 870748),
+        // which then names nothing the reply offers; the built-ins a reply
+        // keeps would stay (#292).
+        if reply.is_some() && self.slash.active.borrow().as_ref().is_some_and(|a| !a.command.is_built_in()) {
+            self.end_command(super::slash::Keep::Text);
+        }
         // Use Apps in the attach menu shows only where nothing is replied to.
         self.refresh_attach();
         for id in previous.iter().chain(&reply).map(|r| r.to) {
             self.refresh_message(id);
         }
+        self.reply_changed_slash();
     }
 
     pub(super) fn show_composer_error(&self, text: &str) {
@@ -499,6 +684,65 @@ impl App {
     }
 
     /// Draw the length indicator for what the box holds now.
+    /// Show the message box's buttons and its count as the client's bar has
+    /// them for the open channel.
+    pub(super) fn refresh_chat_bar(&self) {
+        let channel = self.account.state.borrow().channel;
+        let buffer = self.composer.buffer();
+        let empty = discord::rest::nothing_to_send(
+            &buffer.text(&buffer.start_iter(), &buffer.end_iter(), false),
+            channel.map_or(0, |c| self.files_for_message(c).len()),
+            channel.is_some_and(|c| self.waiting.of(c).is_some()),
+        );
+        let announcement = {
+            let state = self.account.state.borrow();
+            let kind = channel.and_then(|c| state.find_channel(c)).map(|(_, c)| c.kind);
+            kind == Some(ChannelKind::Announcement)
+                && state.me().is_some_and(|me| chat_bar::announcement_composer(&state.experiments, me))
+        };
+        let bar = Bar {
+            open: channel.is_some() && self.composer_box.is_visible(),
+            editing: self.editing().is_some(),
+            recording: channel.is_some_and(|c| self.has_voice_draft(c)),
+            command: self.slash.is_active(),
+            pill: self.command_pill(),
+            empty,
+            customizable: self.chat_bar_customizable(),
+            announcement,
+        };
+        let shown = chat_bar::shown(bar, self.chat_bar_prefs());
+        self.slash.icon.set_visible(shown.app_icon);
+        self.gif_button.set_visible(shown.gif);
+        self.sticker_button.set_visible(shown.sticker);
+        self.emoji_button.set_visible(shown.emoji);
+        self.apps_button.set_visible(shown.apps);
+        self.send_separator.set_visible(shown.send);
+        self.send_button.set_visible(shown.send);
+        self.send_button.set_sensitive(shown.send_enabled);
+        if shown.count {
+            self.update_length_indicator();
+        } else {
+            self.length.show(None);
+        }
+    }
+
+    /// The device's choice of buttons.
+    pub(super) fn chat_bar_prefs(&self) -> Prefs {
+        Prefs {
+            send: self.config.get(&config::SEND_BUTTON),
+            apps: self.config.get(&config::APPS_BUTTON),
+            emoji: self.config.get(&config::EMOJI_BUTTON),
+            gif: self.config.get(&config::GIF_BUTTON),
+            sticker: self.config.get(&config::STICKER_BUTTON),
+        }
+    }
+
+    /// Whether the account follows that choice ([`chat_bar::customizable`]).
+    pub(super) fn chat_bar_customizable(&self) -> bool {
+        let state = self.account.state.borrow();
+        state.me().is_some_and(|me| chat_bar::customizable(&state.experiments, me))
+    }
+
     pub(super) fn update_length_indicator(&self) {
         let buffer = self.composer.buffer();
         let length = message_length(&buffer.text(&buffer.start_iter(), &buffer.end_iter(), false));
@@ -525,19 +769,40 @@ impl App {
             return;
         }
         let buffer = self.composer.buffer();
-        let found = match mention_token(&buffer) {
-            Some((start, prefix)) => Some((start, self.mention_candidates(&prefix))),
-            None => emoji_token(&buffer).map(|(start, query)| (start, self.emoji_candidates(&query))),
-        };
+        if let Some((start, prefix)) = mention_token(&buffer) {
+            let (candidates, header) = self.chat_mentions(&prefix);
+            let headers = header.map(|h| vec![(0, h)]).unwrap_or_default();
+            return self.show_listed(MentionCtx { start, candidates, headers, ..MentionCtx::default() }, Some(0));
+        }
+        let found = emoji_token(&buffer).map(|(start, query)| (start, self.emoji_candidates(&query)));
         match found {
             Some((start, candidates)) => self.show_completions(start, candidates),
+            None if self.bot_command_popup(true) => {}
             None => self.mention_popover.popdown(),
         }
     }
 
-    /// Show `candidates` in the popup, for the token starting at `start`.
+    /// Show `candidates` in the popup, for the token starting at `start`,
+    /// the first selected.
     pub(super) fn show_completions(self: &Rc<Self>, start: i32, candidates: Vec<Completion>) {
-        if candidates.is_empty() {
+        self.show_listed(MentionCtx { start, candidates, ..MentionCtx::default() }, Some(0));
+    }
+
+    /// Show what `ctx` lists in the popup, under its headers, `selected`
+    /// selected.
+    pub(super) fn show_listed(self: &Rc<Self>, ctx: MentionCtx, selected: Option<usize>) {
+        // The people listed are checked to still be members (`m` in 579974).
+        let people: Vec<Snowflake> = (ctx.candidates.iter())
+            .filter_map(|c| match c {
+                Completion::Mention(id, _) => Some(Snowflake(*id)),
+                _ => None,
+            })
+            .collect();
+        match people.is_empty() {
+            true => self.suggestions_closed(),
+            false => self.suggestions_listed(people),
+        }
+        if ctx.candidates.is_empty() {
             self.mention_popover.popdown();
             return;
         }
@@ -545,13 +810,24 @@ impl App {
         while let Some(child) = self.mention_list.first_child() {
             self.mention_list.remove(&child);
         }
-        for candidate in &candidates {
+        // The headers are read as the rows go in.
+        *self.mention.borrow_mut() = MentionCtx { headers: ctx.headers, icons: ctx.icons, ..MentionCtx::default() };
+        for candidate in &ctx.candidates {
             let row = gtk::ListBoxRow::new();
             row.set_child(Some(&candidate.row(&self.images)));
+            if matches!(candidate, Completion::Status(_)) {
+                row.set_activatable(false);
+                row.set_selectable(false);
+            }
             self.mention_list.append(&row);
         }
-        self.mention_list.select_row(self.mention_list.row_at_index(0).as_ref());
-        *self.mention.borrow_mut() = MentionCtx { start, candidates };
+        let (headers, icons) = {
+            let mut kept = self.mention.borrow_mut();
+            (std::mem::take(&mut kept.headers), std::mem::take(&mut kept.icons))
+        };
+        *self.mention.borrow_mut() = MentionCtx { candidates: ctx.candidates, headers, icons, ..ctx };
+        self.mention_list.invalidate_headers();
+        self.select_row(selected);
 
         // Point at the caret so the popup tracks where you are typing.
         if let Some(rect) = self.caret_rect() {
@@ -560,22 +836,38 @@ impl App {
         self.mention_popover.popup();
     }
 
-    fn mention_candidates(&self, prefix: &str) -> Vec<Completion> {
-        let prefix = prefix.to_lowercase();
-        let state = self.account.state.borrow();
-        let mut matches: Vec<(u64, String)> = state
-            .users
-            .iter()
-            .filter(|(_, name)| name.to_lowercase().contains(&prefix))
-            .map(|(id, name)| (*id, name.clone()))
-            .collect();
-        // Prefix matches first, then alphabetical; cap the list.
-        matches.sort_by(|a, b| {
-            let rank = |n: &str| if n.to_lowercase().starts_with(&prefix) { 0 } else { 1 };
-            rank(&a.1).cmp(&rank(&b.1)).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-        });
-        matches.truncate(8);
-        matches.into_iter().map(|(id, name)| Completion::Mention(id, name)).collect()
+    /// What the `@` list offers for `prefix` in the open channel, under its
+    /// header (`e7` in 496533, `queryMentionResults` in 997625): the people
+    /// who can see it ([`App::mentions`]), then roles, `@everyone` and
+    /// `@here` where we may name them ([`discord::mention_list`]), ten rows
+    /// at most.
+    pub(super) fn chat_mentions(self: &Rc<Self>, prefix: &str) -> (Vec<Completion>, Option<Header>) {
+        let Some(channel) = self.account.state.borrow().channel else { return (Vec::new(), None) };
+        let (people, _, _) = self.mentions(channel, prefix, true, false, true);
+        let (roles, globals) = {
+            let state = self.account.state.borrow();
+            match (state.find_channel(channel), &state.account) {
+                (Some((Some(guild), open)), Some(me)) => {
+                    let permitted = discord::permissions::in_channel(guild, open, me, now_unix())
+                        .contains(discord::permissions::Permissions::MENTION_EVERYONE);
+                    let everyone = mention_list::may_mention_everyone(false, permitted, guild.pending);
+                    let roles = mention_list::roles(guild, prefix, everyone, people.len());
+                    let listed = people.len() + roles.len();
+                    (mention_list::named(&roles), mention_list::globals(prefix, everyone, false, listed))
+                }
+                _ => (Vec::new(), Vec::new()),
+            }
+        };
+        let header =
+            discord::command_line::mention_header(true, people.len(), !globals.is_empty(), roles.len(), prefix);
+        let mut candidates: Vec<Completion> =
+            people.into_iter().map(|(id, name)| Completion::Mention(id.0, name)).collect();
+        candidates.extend(globals.into_iter().map(|global| match global {
+            Global::Everyone => Completion::Everyone,
+            Global::Here => Completion::Here,
+        }));
+        candidates.extend(roles.into_iter().map(|(id, name)| Completion::Role(id, name)));
+        (candidates, header)
     }
 
     /// The emoji we may send in the open channel that `query` finds, best
@@ -583,7 +875,7 @@ impl App {
     /// ones aren't offered here, as in the client. Looking for emoji loads
     /// the counts of use (`queryEmojiResults`, 997625), which rank them once
     /// they are there.
-    fn emoji_candidates(self: &Rc<Self>, query: &str) -> Vec<Completion> {
+    pub(super) fn emoji_candidates(self: &Rc<Self>, query: &str) -> Vec<Completion> {
         let Some(channel) = self.account.state.borrow().channel else { return Vec::new() };
         self.load_frecency(|| {});
         let scores = self.emoji_scores(Intention::Chat);
@@ -602,18 +894,35 @@ impl App {
         });
     }
 
+    /// Select row `index` of the popup, or none, keeping it in view.
+    pub(super) fn select_row(&self, index: Option<usize>) {
+        match index.and_then(|i| self.mention_list.row_at_index(i as i32)) {
+            Some(row) => {
+                self.mention_list.select_row(Some(&row));
+                self.scroll_to_row(&row);
+            }
+            None => self.mention_list.unselect_all(),
+        }
+    }
+
     pub(super) fn move_mention_selection(&self, delta: i32) {
         let count = self.mention.borrow().candidates.len() as i32;
         if count == 0 {
             return;
         }
-        let current = self.mention_list.selected_row().map(|r| r.index()).unwrap_or(0);
-        let next = (current + delta).rem_euclid(count);
-        let row = self.mention_list.row_at_index(next);
-        self.mention_list.select_row(row.as_ref());
-        // The list scrolls, so the selection must stay in view.
-        if let (Some(row), Some(scroller)) =
-            (row, self.mention_list.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>())
+        // With none selected, Down takes the first and Up the last.
+        let next = match self.mention_list.selected_row() {
+            Some(row) => (row.index() + delta).rem_euclid(count),
+            None if delta > 0 => 0,
+            None => count - 1,
+        };
+        self.select_row(Some(next as usize));
+    }
+
+    /// The list scrolls, so the selection must stay in view.
+    fn scroll_to_row(&self, row: &gtk::ListBoxRow) {
+        if let Some(scroller) =
+            self.mention_list.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>()
             && let Some(bounds) = row.compute_bounds(&self.mention_list)
         {
             let adjustment = scroller.vadjustment();
@@ -627,12 +936,15 @@ impl App {
     }
 
     pub(super) fn accept_mention(self: &Rc<Self>, index: i32) {
+        if self.accept_in_line(index.max(0) as usize) {
+            return;
+        }
         let command = match self.mention.borrow().candidates.get(index.max(0) as usize) {
             Some(Completion::Command(suggestion)) => Some(suggestion.id.clone()),
             _ => None,
         };
         if let Some(id) = command {
-            return self.start_command(&id);
+            return self.activate_command(&id, discord::commands::RunFrom::CHAT);
         }
         let (start, text) = {
             let ctx = self.mention.borrow();
@@ -690,33 +1002,42 @@ impl App {
         }
     }
 
+    /// Save the edit, or send what the box holds to the open channel.
     pub(super) fn send_composer(self: &Rc<Self>) {
         if self.editing().is_some() {
             return self.save_edit();
         }
         let buffer = self.composer.buffer();
         let typed = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().to_owned();
-        let (channel, rest) = {
-            let state = self.account.state.borrow();
-            (state.channel, state.rest.clone())
-        };
-        let (Some(channel), Some(rest)) = (channel, rest) else { return };
+        let Some(channel) = self.account.state.borrow().channel else { return };
+        self.send_text(channel, typed, false);
+    }
+
+    /// Send `typed` to `channel` as the box sends a message, with the box's
+    /// files, waiting sticker, reply and scheduled time, the text read aloud
+    /// with `tts`. True once it is on its way, or reacted for `+:name:`;
+    /// false when held back, the text left where it was. If Discord refuses
+    /// it, `typed` goes back in an empty box.
+    pub(super) fn send_text(self: &Rc<Self>, channel: Snowflake, typed: String, tts: bool) -> bool {
+        let Some(rest) = self.account.state.borrow().rest.clone() else { return false };
         let files = self.files_for_message(channel);
         let waiting = self.waiting.of(channel);
         // A hidden message box is a channel we must never post to (#51).
-        if (typed.is_empty() && files.is_empty() && waiting.is_none()) || !self.composer_box.is_visible() {
-            return;
+        if discord::rest::nothing_to_send(&typed, files.len(), waiting.is_some()) || !self.composer_box.is_visible() {
+            return false;
         }
         // The box follows our permissions, but they may have changed since.
         if !self.account.state.borrow().can_send(channel) {
-            return self.update_notice_bar();
+            self.update_notice_bar();
+            return false;
         }
         // What was true when the sticker was picked may not be now.
         if let Some(listed) = &waiting
             && self.sticker_sendable(channel, listed).is_err()
         {
             self.set_waiting_sticker(channel, None);
-            return self.show_composer_error("That sticker can't be sent here.");
+            self.show_composer_error("That sticker can't be sent here.");
+            return false;
         }
         // `:name:`s go out as emoji. The length is checked on what goes out,
         // which is longer than what was typed.
@@ -726,28 +1047,33 @@ impl App {
         // The client checks length before slowmode. The text stays in the box to be shortened.
         let too_long = self.account.state.borrow().limits().check_length(&text);
         if let Err(too_long) = too_long {
-            return self.show_too_long(too_long);
+            self.show_too_long(too_long);
+            return false;
         }
         if !files.is_empty() {
             if !self.account.state.borrow().can_attach(channel) {
-                return self.update_notice_bar();
+                self.update_notice_bar();
+                return false;
             }
             let allowed = {
                 let state = self.account.state.borrow();
                 state.limits().uploads(state.find_channel(channel).and_then(|(guild, _)| guild))
             };
             if let Err(refusal) = discord::uploads::check_send(&allowed, &Self::sizes(&files)) {
-                return self.show_refusal(&refusal);
+                self.show_refusal(&refusal);
+                return false;
             }
         }
         // Slowmode would refuse it; the notice bar says how long is left.
         if self.slowmode_left(channel) > 0 {
-            return self.update_notice_bar();
+            self.update_notice_bar();
+            return false;
         }
         // The time may have come too close since it was chosen, which Discord would refuse.
         let scheduled = self.scheduled_time(channel);
         if let Some(Err(refusal)) = scheduled.map(|at| scheduled::check(at, now_unix(), None)) {
-            return self.show_composer_error(refusal.text());
+            self.show_composer_error(refusal.text());
+            return false;
         }
         // `+:name:` reacts to the newest message in place of sending, unless
         // files go with it, which send as they are.
@@ -755,7 +1081,7 @@ impl App {
             self.typing_message_sent(channel);
             self.set_composer_text("");
             self.mention_popover.popdown();
-            return;
+            return true;
         }
         let can_reply = self.account.state.borrow().can_reply(channel);
         let replying = self.reply.borrow().clone().filter(|r| r.channel == channel && can_reply);
@@ -787,7 +1113,7 @@ impl App {
         glib::spawn_future_local(async move {
             // The gateway echoes our own message back, which is what adds it to the list.
             let sticker = waiting.as_ref().map(|w| w.sticker.id);
-            let message = Outgoing { text: &text, reply, sticker, at: at.as_deref() };
+            let message = Outgoing { text: &text, reply, sticker, at: at.as_deref(), tts };
             match this.send_with_uploads(&rest, channel, &message, files).await {
                 Ok(()) => match scheduled {
                     Some(at) => this.message_scheduled(channel, at),
@@ -816,6 +1142,7 @@ impl App {
                 }
             }
         });
+        true
     }
 }
 

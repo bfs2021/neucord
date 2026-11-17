@@ -37,6 +37,7 @@ const STREAM_NOTIFICATIONS_ENABLED: u32 = 7;
 
 // TextAndImagesSettings.
 const DIVERSITY_SURROGATE: u32 = 1;
+const SHOW_COMMAND_SUGGESTIONS: u32 = 8;
 const INLINE_ATTACHMENT_MEDIA: u32 = 9;
 const INLINE_EMBED_MEDIA: u32 = 10;
 const GIF_AUTO_PLAY: u32 = 11;
@@ -44,7 +45,9 @@ const RENDER_EMBEDS: u32 = 12;
 const RENDER_REACTIONS: u32 = 13;
 const ANIMATE_EMOJI: u32 = 14;
 const ANIMATE_STICKERS: u32 = 15;
+const ENABLE_TTS_COMMAND: u32 = 16;
 const MESSAGE_DISPLAY_COMPACT: u32 = 17;
+const VIEW_NSFW_COMMANDS: u32 = 23;
 
 // NotificationSettings.
 const REACTION_NOTIFICATIONS: u32 = 7;
@@ -169,6 +172,9 @@ impl SettingsPatch {
             status: settings.message(STATUS).map(|status| status_settings(&status)),
             localization: settings.message(LOCALIZATION).map(|l| l.string_value(LOCALE).map(String::from)),
             skin_tone: text.as_ref().and_then(|t| t.string_value(DIVERSITY_SURROGATE)).map(Tone::from_modifier),
+            nsfw_commands_in_dms: flag(VIEW_NSFW_COMMANDS),
+            enable_tts_command: flag(ENABLE_TTS_COMMAND),
+            show_command_suggestions: flag(SHOW_COMMAND_SUGGESTIONS),
         })
     }
 }
@@ -264,6 +270,8 @@ pub enum Setting {
     RenderReactions(bool),
     GifAutoPlay(bool),
     AnimateEmoji(bool),
+    /// The message box menu's Suggestions ▸ Slash Commands (194400).
+    ShowCommandSuggestions(bool),
     AnimateStickers(StickerAnimation),
     DeveloperMode(bool),
     ReactionNotifications(ReactionNotifications),
@@ -342,6 +350,7 @@ impl Setting {
             Setting::InlineAttachmentMedia(on) => one(TEXT_AND_IMAGES, INLINE_ATTACHMENT_MEDIA, Some(bool_value(on))),
             Setting::RenderReactions(on) => one(TEXT_AND_IMAGES, RENDER_REACTIONS, Some(bool_value(on))),
             Setting::GifAutoPlay(on) => one(TEXT_AND_IMAGES, GIF_AUTO_PLAY, Some(bool_value(on))),
+            Setting::ShowCommandSuggestions(on) => one(TEXT_AND_IMAGES, SHOW_COMMAND_SUGGESTIONS, Some(bool_value(on))),
             Setting::AnimateEmoji(on) => one(TEXT_AND_IMAGES, ANIMATE_EMOJI, Some(bool_value(on))),
             Setting::AnimateStickers(how) => one(TEXT_AND_IMAGES, ANIMATE_STICKERS, Some(uint_value(how.raw() as u32))),
             Setting::DeveloperMode(on) => one(APPEARANCE, DEVELOPER_MODE, plain(on)),
@@ -515,6 +524,57 @@ mod tests {
         assert_eq!(patch.developer_mode, Some(true));
     }
 
+    /// Read from the protobuf only, which READY's JSON also carries but the
+    /// client never reads.
+    #[test]
+    fn age_restricted_commands_in_dms() {
+        let patch = patch(&bytes_field(TEXT_AND_IMAGES, &bool_wrapper(VIEW_NSFW_COMMANDS, true)));
+        assert_eq!(patch.nsfw_commands_in_dms, Some(true));
+        assert_eq!(self::patch(&bytes_field(TEXT_AND_IMAGES, &[])).nsfw_commands_in_dms, None);
+        let mut settings = crate::settings::Settings { nsfw_commands_in_dms: true, ..Default::default() };
+        settings.replace(self::patch(&bytes_field(TEXT_AND_IMAGES, &[])));
+        assert!(!settings.nsfw_commands_in_dms, "absent is off");
+        let json = SettingsPatch::from_json(&serde_json::json!({"view_nsfw_commands": true}));
+        assert_eq!(json.nsfw_commands_in_dms, None);
+    }
+
+    /// A `BoolValue` that most protos leave out, which means on (253932's
+    /// default); READY's JSON copy isn't read.
+    #[test]
+    fn reads_the_tts_command_setting() {
+        let off = patch(&bytes_field(TEXT_AND_IMAGES, &bool_wrapper(ENABLE_TTS_COMMAND, false)));
+        assert_eq!(off.enable_tts_command, Some(false));
+        let on = patch(&bytes_field(TEXT_AND_IMAGES, &bool_wrapper(ENABLE_TTS_COMMAND, true)));
+        assert_eq!(on.enable_tts_command, Some(true));
+        assert_eq!(patch(&bytes_field(TEXT_AND_IMAGES, &[])).enable_tts_command, None);
+        let mut settings = crate::settings::Settings::default();
+        assert!(settings.tts_command(), "on by default");
+        settings.replace(off);
+        assert!(!settings.tts_command());
+        settings.replace(patch(&bytes_field(TEXT_AND_IMAGES, &[])));
+        assert!(settings.tts_command(), "absent is on");
+        assert_eq!(
+            SettingsPatch::from_json(&serde_json::json!({"enable_tts_command": false})).enable_tts_command,
+            None
+        );
+    }
+
+    /// A `BoolValue` too, on when left out (`showCommandSuggestions` in
+    /// 253932).
+    #[test]
+    fn reads_the_command_suggestions_setting() {
+        let off = patch(&bytes_field(TEXT_AND_IMAGES, &bool_wrapper(SHOW_COMMAND_SUGGESTIONS, false)));
+        assert_eq!(off.show_command_suggestions, Some(false));
+        let mut settings = crate::settings::Settings::default();
+        assert!(settings.command_suggestions(), "on by default");
+        settings.replace(off);
+        assert!(!settings.command_suggestions());
+        settings.replace(patch(&bytes_field(TEXT_AND_IMAGES, &[])));
+        assert!(settings.command_suggestions(), "absent is on");
+        let (group, written) = Setting::ShowCommandSuggestions(false).written(&[]).unwrap();
+        assert_eq!((group, written), (TEXT_AND_IMAGES, bool_wrapper(SHOW_COMMAND_SUGGESTIONS, false)));
+    }
+
     /// Developer Mode is a plain `bool`, not a wrapper: proto3 leaves `false`
     /// out, so appearance without it is how another client turns it off.
     #[test]
@@ -631,6 +691,7 @@ mod tests {
             GifAutoPlay(false),
             AnimateEmoji(false),
             AnimateStickers(StickerAnimation::Never),
+            ShowCommandSuggestions(false),
             DeveloperMode(true),
             ReactionNotifications(self::ReactionNotifications::OnlyDms),
             FriendOnlineNotifications(false),
@@ -710,6 +771,7 @@ mod tests {
                 },
                 locale: Some("fr".into()),
                 skin_tone: Some(Tone::MediumDark),
+                show_command_suggestions: Some(false),
                 ..Settings::default()
             }
         );

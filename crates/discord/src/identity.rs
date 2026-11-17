@@ -5,7 +5,7 @@
 //! order, with Neucord's own values where the client reads the browser's. The
 //! client builds them once (`getSuperProperties`, 613412), adds the build
 //! and its launch id, and brings the heartbeat session and the focus up to
-//! date before every request (`prepareRequest`, 852799, over 618651). The
+//! date before every request (`prepareRequest`, 526227, over 618651). The
 //! gateway sends the same object (`handleIdentify`, 225123), refreshed only
 //! by the last request, plus what only it carries.
 
@@ -33,7 +33,7 @@ pub const GATEWAY_URL: &str = "wss://gateway.discord.gg/?encoding=json&v=9&compr
 /// raises it once that week's changes are handled (`discord-watch`'s
 /// `raise-build`), so it never claims a build Neucord hasn't been compared
 /// with; one some weeks old is what a tab left open sends.
-pub const CLIENT_BUILD_NUMBER: u32 = 668923;
+pub const CLIENT_BUILD_NUMBER: u32 = 673919;
 
 /// The locale every request names: `X-Discord-Locale`, and the `locale` the
 /// client's sticker packs request carries, which are the same setting there.
@@ -186,7 +186,7 @@ pub fn beat_delay_ms(since_last_beat_ms: Option<i64>) -> i64 {
 }
 
 /// The Apex assignments of an account, which the client keeps between
-/// launches in its store, by user id (50258). One for each account.
+/// launches in its store, by user id (340344). One for each account.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cache {
     /// The account's own, as READY sent them

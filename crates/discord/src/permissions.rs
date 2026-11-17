@@ -23,7 +23,7 @@ use std::ops::{BitAnd, BitOr};
 use serde::{Deserialize, Deserializer};
 
 use crate::verification::{self, Account};
-use crate::{Channel, ChannelKind, Guild, Message};
+use crate::{Channel, ChannelKind, Guild, Message, Snowflake, User};
 
 /// A set of Discord's permission bits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -304,7 +304,7 @@ pub fn in_channel(guild: &Guild, channel: &Channel, me: &Account, now: i64) -> P
     compute(guild, &channel.permission_overwrites, me, now)
 }
 
-/// Ours in `thread`, given ours in its parent (the client's thread rule, `x`
+/// Ours in `thread`, given ours in its parent (the client's thread rule, `F`
 /// in 488926). A media thread only takes reading. A private thread we
 /// haven't joined gives nothing without Manage Threads, unless we're a
 /// guest. Otherwise the parent's permissions apply, with Send Messages
@@ -345,26 +345,7 @@ fn compute(guild: &Guild, overwrites: &[crate::model::Overwrite], me: &Account, 
 
 /// From our roles and the overwrites; the owner never gets here.
 fn member(guild: &Guild, overwrites: &[crate::model::Overwrite], me: &Account, now: i64) -> Permissions {
-    let everyone = guild.role(guild.id).map_or(Permissions::DEFAULT_EVERYONE, |r| r.permissions);
-    let base = guild.my_roles.iter().filter_map(|&id| guild.role(id)).fold(everyone, |p, r| p | r.permissions);
-    if base.contains(Permissions::ADMINISTRATOR) {
-        return Permissions::ALL;
-    }
-    // Overwrites are keyed by id: `@everyone`'s is the server's own.
-    let find = |id| overwrites.iter().rfind(|o| o.id == id);
-    let mut permissions = base;
-    if let Some(o) = find(guild.id) {
-        permissions = permissions.overwritten(o.deny, o.allow);
-    }
-    let (deny, allow) = guild
-        .my_roles
-        .iter()
-        .filter_map(|&id| find(id))
-        .fold((Permissions::NONE, Permissions::NONE), |(deny, allow), o| (deny | o.deny, allow | o.allow));
-    permissions = permissions.overwritten(deny, allow);
-    if let Some(o) = find(me.id) {
-        permissions = permissions.overwritten(o.deny, o.allow);
-    }
+    let mut permissions = from_roles(guild, overwrites, me.id, &guild.my_roles);
     if !permissions.contains(Permissions::ADMINISTRATOR) {
         if guild.member_flags & AUTOMOD_QUARANTINED != 0 {
             permissions = permissions & Permissions::QUARANTINED;
@@ -374,6 +355,52 @@ fn member(guild: &Guild, overwrites: &[crate::model::Overwrite], me: &Account, n
         }
     }
     permissions
+}
+
+/// What `user`'s roles and the overwrites give: `@everyone`'s, then their
+/// roles', then the overwrites of `@everyone`, of their roles together and
+/// of them, unless a role makes them an administrator.
+fn from_roles(
+    guild: &Guild,
+    overwrites: &[crate::model::Overwrite],
+    user: Snowflake,
+    roles: &[Snowflake],
+) -> Permissions {
+    let everyone = guild.role(guild.id).map_or(Permissions::DEFAULT_EVERYONE, |r| r.permissions);
+    let base = roles.iter().filter_map(|&id| guild.role(id)).fold(everyone, |p, r| p | r.permissions);
+    if base.contains(Permissions::ADMINISTRATOR) {
+        return Permissions::ALL;
+    }
+    // Overwrites are keyed by id: `@everyone`'s is the server's own.
+    let find = |id| overwrites.iter().rfind(|o| o.id == id);
+    let mut permissions = base;
+    if let Some(o) = find(guild.id) {
+        permissions = permissions.overwritten(o.deny, o.allow);
+    }
+    let (deny, allow) = (roles.iter())
+        .filter_map(|&id| find(id))
+        .fold((Permissions::NONE, Permissions::NONE), |(deny, allow), o| (deny | o.deny, allow | o.allow));
+    permissions = permissions.overwritten(deny, allow);
+    if let Some(o) = find(user) {
+        permissions = permissions.overwritten(o.deny, o.allow);
+    }
+    permissions
+}
+
+/// Whether another member, `user` with `roles`, can see `channel` (a
+/// thread's parent stands for it): the message box's `@` list offers only
+/// them (`queryChannelUsers` in 997625, asking 488926's `$3` for View
+/// Channel). The owner always can.
+pub fn member_can_view(guild: &Guild, channel: &Channel, user: Snowflake, roles: &[Snowflake]) -> bool {
+    let channel = match channel.parent_id.filter(|_| channel.kind.is_thread()) {
+        Some(parent) => match guild.channel(parent) {
+            Some(parent) => parent,
+            None => return false,
+        },
+        None => channel,
+    };
+    guild.owner_id == Some(user)
+        || from_roles(guild, &channel.permission_overwrites, user, roles).contains(Permissions::VIEW_CHANNEL)
 }
 
 /// What it takes to see `channel` at all (the client's `accessPermissions`):
@@ -418,7 +445,7 @@ pub fn hidden_from_everyone(guild: &Guild, channel: &Channel) -> bool {
 /// servers, and in one where we can see it with Send Messages. The client
 /// asks only for the latter, but never opens a channel we can't see. Never
 /// a forum or media channel: Send Messages there starts posts, which are
-/// threads, and the client shows them no message box (289287).
+/// threads, and the client shows them no message box (420018).
 pub fn can_send(guild: Option<&Guild>, channel: &Channel, me: &Account, now: i64) -> bool {
     match guild {
         None => !channel.is_system_dm(),
@@ -494,6 +521,59 @@ pub fn can_reply(guild: Option<&Guild>, channel: &Channel, me: &Account, now: i6
         })
 }
 
+/// Whether we may act on `target`, a member of `guild`, with `permission`
+/// (`canManageUser` in 576705): never the owner; `permission` in the server
+/// as a whole; and we own the server, or our highest role is above theirs,
+/// which it always is when they have none or we don't know theirs
+/// (`target_roles` none: `HJ` in 488926 finds no member). Highest and above
+/// go by [`Guild::highest_role`] (`wO` in 488926, `zA` in 7864).
+pub fn can_manage(
+    guild: &Guild,
+    me: &Account,
+    target: Snowflake,
+    target_roles: Option<&[Snowflake]>,
+    permission: Permissions,
+    now: i64,
+) -> bool {
+    if guild.owner_id == Some(target) || !in_guild(guild, me, now).contains(permission) {
+        return false;
+    }
+    if guild.owner_id == Some(me.id) {
+        return true;
+    }
+    let highest = |roles: &[Snowflake]| guild.highest_role(roles.iter().filter_map(|&id| guild.role(id)));
+    let Some(ours) = highest(&guild.my_roles) else { return false };
+    match target_roles.and_then(highest) {
+        None => true,
+        Some(theirs) => guild.highest_role([ours, theirs]).is_some_and(|h| h.id == ours.id && ours.id != theirs.id),
+    }
+}
+
+/// Whether /timeout may time `target` out (`b` in 838111): someone we know
+/// (`target` none: not in the client's `UserStore`), not Discord's own or a
+/// webhook's account, not the owner, without Administrator from
+/// `@everyone` and their roles (`$3` in 488926; the 2FA cut there is only
+/// ever ours), and [`can_manage`] with Moderate Members.
+pub fn can_time_out(
+    guild: &Guild,
+    me: &Account,
+    target: Option<&User>,
+    target_roles: Option<&[Snowflake]>,
+    now: i64,
+) -> bool {
+    let Some(target) = target else { return false };
+    let everyone = guild.role(guild.id).map_or(Permissions::DEFAULT_EVERYONE, |r| r.permissions);
+    let theirs = target_roles
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|&id| guild.role(id))
+        .fold(everyone, |p, r| p | r.permissions);
+    !target.non_user_bot()
+        && guild.owner_id != Some(target.id)
+        && !theirs.contains(Permissions::ADMINISTRATOR)
+        && can_manage(guild, me, target.id, target_roles, Permissions::MODERATE_MEMBERS, now)
+}
+
 /// Whether we may reopen an archived `thread` (`lK` in 406704): a locked one
 /// with Manage Threads, any other with Send Messages in Threads and Send
 /// Messages there, and Send Messages in its parent. Never a media thread.
@@ -531,7 +611,7 @@ pub fn can_delete(guild: Option<&Guild>, channel: &Channel, message: &Message, m
 }
 
 /// What the client offers of reactions in a channel (`A` in 707985, with
-/// what `cO` in 679636 feeds it).
+/// what `cw` in 190854 feeds it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reacting {
     /// Add one with an emoji nobody has used on the message: the add button,
@@ -638,7 +718,7 @@ mod tests {
     const HISTORY: Permissions = Permissions::READ_MESSAGE_HISTORY;
 
     fn me() -> Account {
-        Account { id: ME, verified: true, email: true, phone: false, mfa: false }
+        Account { id: ME, verified: true, email: true, phone: false, mfa: false, nsfw_allowed: false }
     }
 
     /// `@everyone` may view, send and read; Mod adds Manage Messages and
@@ -672,6 +752,19 @@ mod tests {
 
     fn can(guild: &Guild, channel: &Channel, permissions: Permissions) -> bool {
         in_channel(guild, channel, &me(), 0).contains(permissions)
+    }
+
+    #[test]
+    fn whom_the_at_list_offers_can_see_the_channel() {
+        let guild = guild();
+        let (them, theirs) = (Snowflake(7), [Snowflake(MOD)]);
+        let staff = channel(&[(GUILD, VIEW, Permissions::NONE), (MOD, Permissions::NONE, VIEW)]);
+        assert!(member_can_view(&guild, &staff, them, &theirs), "by a role's overwrite");
+        assert!(!member_can_view(&guild, &staff, them, &[]), "@everyone can't");
+        assert!(member_can_view(&guild, &staff, Snowflake(2), &[]), "the owner can");
+        let hidden = channel(&[(7, VIEW, Permissions::NONE)]);
+        assert!(!member_can_view(&guild, &hidden, them, &theirs), "their own overwrite comes last");
+        assert!(member_can_view(&guild, &channel(&[]), them, &[]));
     }
 
     #[test]
@@ -1294,5 +1387,68 @@ mod tests {
         assert_eq!(parse(json!(1024)), VIEW);
         assert_eq!(parse(json!(null)), Permissions::NONE);
         assert!(serde_json::from_value::<Permissions>(json!("lots")).is_err());
+    }
+
+    /// A server where `@everyone` has `everyone`; Mod (position 3), Member
+    /// (2) and Helper (2, a larger id) give nothing more.
+    fn ranked(everyone: Permissions, mine: &[u64]) -> Guild {
+        let mut guild: Guild = serde_json::from_value(json!({
+            "id": GUILD.to_string(), "name": "G", "owner_id": "2",
+            "roles": [
+                {"id": GUILD.to_string(), "name": "@everyone", "permissions": everyone.0.to_string()},
+                {"id": "40", "name": "Mod", "permissions": "0", "position": 3},
+                {"id": "41", "name": "Member", "permissions": "0", "position": 2},
+                {"id": "42", "name": "Helper", "permissions": "0", "position": 2},
+                {"id": "43", "name": "Admin", "permissions": Permissions::ADMINISTRATOR.0.to_string(), "position": 1},
+            ],
+        }))
+        .unwrap();
+        guild.my_roles = mine.iter().map(|&id| Snowflake(id)).collect();
+        guild
+    }
+
+    #[test]
+    fn managing_needs_a_higher_role() {
+        let kick = Permissions::KICK_MEMBERS;
+        let target = Snowflake(6);
+        let can = |guild: &Guild, roles: Option<&[u64]>| {
+            let roles: Option<Vec<Snowflake>> = roles.map(|r| r.iter().map(|&id| Snowflake(id)).collect());
+            can_manage(guild, &me(), target, roles.as_deref(), kick, 0)
+        };
+        let guild = ranked(kick, &[40]);
+        assert!(can(&guild, Some(&[41])), "above");
+        assert!(!can(&guild, Some(&[40])), "the same role");
+        assert!(can(&guild, Some(&[])), "they have none");
+        assert!(can(&guild, None), "their roles unknown");
+        assert!(!can(&ranked(kick, &[41]), Some(&[40])), "below");
+        // The same position: the older role is above.
+        assert!(can(&ranked(kick, &[41]), Some(&[42])));
+        assert!(!can(&ranked(kick, &[42]), Some(&[41])));
+        assert!(!can(&ranked(kick, &[]), None), "we have no role");
+        assert!(!can(&ranked(Permissions::NONE, &[40]), Some(&[41])), "the permission missing");
+        assert!(!can_manage(&guild, &me(), Snowflake(2), None, kick, 0), "never the owner");
+        let mut owned = ranked(Permissions::NONE, &[]);
+        owned.owner_id = Some(ME);
+        assert!(can(&owned, Some(&[40])), "we own it");
+    }
+
+    #[test]
+    fn timeouts_spare_admins_owners_and_webhooks() {
+        let guild = ranked(Permissions::MODERATE_MEMBERS, &[40]);
+        let user = |json: serde_json::Value| serde_json::from_value::<User>(json).unwrap();
+        let pat = user(json!({"id": "6", "username": "pat"}));
+        let roles = [Snowflake(41)];
+        let out = |target: Option<&User>, roles: Option<&[Snowflake]>| can_time_out(&guild, &me(), target, roles, 0);
+        assert!(out(Some(&pat), Some(&roles)));
+        assert!(!out(None, Some(&roles)), "someone nobody knows");
+        assert!(!out(Some(&pat), Some(&[Snowflake(43)])), "an administrator, whatever their rank");
+        let hook = user(json!({"id": "6", "username": "hook", "bot": true, "discriminator": "0000"}));
+        assert!(!out(Some(&hook), Some(&roles)));
+        let owner = user(json!({"id": "2", "username": "own"}));
+        assert!(!out(Some(&owner), None));
+        assert!(!can_time_out(&ranked(Permissions::NONE, &[40]), &me(), Some(&pat), Some(&roles), 0));
+        // Administrator on `@everyone` makes everyone one.
+        let everyone_admin = ranked(Permissions::MODERATE_MEMBERS | Permissions::ADMINISTRATOR, &[40]);
+        assert!(!can_time_out(&everyone_admin, &me(), Some(&pat), Some(&roles), 0));
     }
 }

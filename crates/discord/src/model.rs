@@ -116,6 +116,19 @@ impl User {
     pub fn non_user_bot(&self) -> bool {
         self.system || (self.bot && self.discriminator.as_deref() == Some("0000"))
     }
+
+    /// `username#1234`, or the username alone for an account with no
+    /// discriminator that counts (`0`, a webhook's `0000`): `getUserTag` in
+    /// 427262, in its default full mode without the `@`.
+    pub fn tag(&self) -> String {
+        if self.username.is_empty() {
+            return "???".into();
+        }
+        match self.discriminator.as_deref() {
+            Some(d) if d != "0" && d != "0000" => format!("{}#{d}", self.username),
+            _ => self.username.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +174,26 @@ impl ChannelKind {
             16 => Self::Media,
             19 => Self::MediaThread,
             other => Self::Other(other),
+        }
+    }
+
+    /// The number Discord gives the kind.
+    pub fn raw(self) -> u8 {
+        match self {
+            Self::Text => 0,
+            Self::Dm => 1,
+            Self::Voice => 2,
+            Self::GroupDm => 3,
+            Self::Category => 4,
+            Self::Announcement => 5,
+            Self::AnnouncementThread => 10,
+            Self::PublicThread => 11,
+            Self::PrivateThread => 12,
+            Self::Stage => 13,
+            Self::Forum => 15,
+            Self::Media => 16,
+            Self::MediaThread => 19,
+            Self::Other(raw) => raw,
         }
     }
 
@@ -273,6 +306,10 @@ pub struct Channel {
     /// itself, when its starter doesn't pick one.
     #[serde(default)]
     pub default_auto_archive_duration: Option<u32>,
+    /// The app that manages a group DM (`isManaged`), which /leave's
+    /// confirmation names.
+    #[serde(default)]
+    pub application_id: Option<Snowflake>,
     /// Ours, in a thread we've joined.
     #[serde(default)]
     pub member: Option<ThreadMember>,
@@ -386,6 +423,9 @@ pub struct Role {
     /// Given by an integration (a bot, boosting), never by hand.
     #[serde(default, deserialize_with = "null_is_false")]
     pub managed: bool,
+    /// Anyone may mention it, not only those who may mention everyone.
+    #[serde(default, deserialize_with = "null_is_false")]
+    pub mentionable: bool,
     /// Higher is above; `@everyone` is always at the bottom.
     #[serde(default, deserialize_with = "null_is_default")]
     pub position: i32,
@@ -487,6 +527,9 @@ impl Channel {
     const PINNED: u64 = 1 << 1;
 }
 
+/// `GuildNSFWContentLevel` (652215): `EXPLICIT` and `AGE_RESTRICTED`.
+const AGE_RESTRICTED_LEVELS: [u8; 2] = [1, 3];
+
 #[derive(Clone, Debug)]
 pub struct Guild {
     pub id: Snowflake,
@@ -524,6 +567,10 @@ pub struct Guild {
     /// From READY or GUILD_CREATE; updates don't carry it.
     pub member_count: Option<u64>,
     pub hub_type: Option<u8>,
+    /// `GuildNSFWContentLevel` (652215) as Discord rates the server, and as
+    /// its owner set it: `DEFAULT` (0) when absent.
+    pub nsfw_level: u8,
+    pub owner_configured_content_level: u8,
     pub vanity_url_code: Option<String>,
     /// Boost level, 0 to 3.
     pub premium_tier: u8,
@@ -596,6 +643,8 @@ impl Guild {
         self.features = update.features;
         self.member_count = update.member_count.or(self.member_count);
         self.hub_type = update.hub_type;
+        self.nsfw_level = update.nsfw_level;
+        self.owner_configured_content_level = update.owner_configured_content_level;
         self.vanity_url_code = update.vanity_url_code;
         self.premium_tier = update.premium_tier;
         self.rules_channel_id = update.rules_channel_id;
@@ -606,6 +655,14 @@ impl Guild {
         if !update.stickers.is_empty() {
             self.stickers = update.stickers;
         }
+    }
+
+    /// Whether the server is age-restricted (`wh` in 260509): by
+    /// `nsfw_level` for accounts in `2025-09-server-nsfw-level`, else by the
+    /// level its owner set.
+    pub fn age_restricted(&self, by_nsfw_level: bool) -> bool {
+        let level = if by_nsfw_level { self.nsfw_level } else { self.owner_configured_content_level };
+        AGE_RESTRICTED_LEVELS.contains(&level)
     }
 
     /// One of the server's channels, not counting threads.
@@ -646,6 +703,12 @@ impl Guild {
 
     pub fn role(&self, id: Snowflake) -> Option<&Role> {
         self.roles.iter().find(|r| r.id == id)
+    }
+
+    /// The highest of `roles` (`AT` in 7864): `@everyone` last, then by
+    /// position, the older (smaller id) above on a tie.
+    pub fn highest_role<'a>(&self, roles: impl IntoIterator<Item = &'a Role>) -> Option<&'a Role> {
+        roles.into_iter().min_by_key(|r| (r.id == self.id, std::cmp::Reverse(r.position), r.id))
     }
 
     /// A role was created or changed.
@@ -789,6 +852,11 @@ impl Guild {
             features,
             member_count: value["member_count"].as_u64(),
             hub_type: props["hub_type"].as_u64().and_then(|t| u8::try_from(t).ok()),
+            nsfw_level: props["nsfw_level"].as_u64().and_then(|v| u8::try_from(v).ok()).unwrap_or(0),
+            owner_configured_content_level: props["owner_configured_content_level"]
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .unwrap_or(0),
             vanity_url_code: props["vanity_url_code"].as_str().map(String::from),
             premium_tier: props["premium_tier"].as_u64().and_then(|t| u8::try_from(t).ok()).unwrap_or(0),
             rules_channel_id: props["rules_channel_id"].as_str().and_then(|id| id.parse().ok()).map(Snowflake),
@@ -969,6 +1037,14 @@ pub struct Message {
     /// installed.
     #[serde(default)]
     pub interaction_metadata: Option<InteractionMetadata>,
+    /// For an app's answer: the command it answers, as the line above it
+    /// names it. Discord calls it deprecated but sends it.
+    #[serde(default)]
+    pub interaction: Option<MessageInteraction>,
+    /// Set when the message launched an activity; only whether it's there
+    /// counts.
+    #[serde(default)]
+    pub activity_instance: Option<serde::de::IgnoredAny>,
     /// A Nitro trial offered to a friend, which can't be edited.
     #[serde(default)]
     pub referral_trial_offer_id: Option<Snowflake>,
@@ -1004,6 +1080,41 @@ pub struct InteractionMetadata {
     /// isn't just the app's choice; see [`crate::interaction::ephemerality_text`].
     #[serde(default)]
     pub ephemerality_reason: Option<u64>,
+    /// The interaction's type: 2 a command, 3 a component, 5 a modal's
+    /// submit (127258).
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    /// Whom a user command was run on.
+    #[serde(default)]
+    pub target_user: Option<User>,
+    /// The command's type (`ApplicationCommandType`), for a command.
+    #[serde(default)]
+    pub command_type: Option<u8>,
+    /// For a modal's submit: the interaction that opened the modal.
+    #[serde(default)]
+    pub triggering_interaction_metadata: Option<Box<InteractionMetadata>>,
+}
+
+/// The command an app's answer answers (`interaction`, read by 432005).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct MessageInteraction {
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    /// The command's name with its subcommands, space-separated.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub name_localized: Option<String>,
+    /// Who ran it.
+    pub user: User,
+}
+
+impl MessageInteraction {
+    /// What the client shows: `name_localized ?? name`, so an empty
+    /// localized name stays empty.
+    pub fn display_name(&self) -> &str {
+        self.name_localized.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -1014,13 +1125,26 @@ pub struct MessageMember {
     pub nick: Option<String>,
     #[serde(default)]
     pub avatar: Option<String>,
+    #[serde(default)]
+    pub joined_at: Option<String>,
+    #[serde(default)]
+    pub flags: u64,
+    #[serde(default)]
+    pub pending: bool,
 }
 
 impl MessageMember {
     /// What shows of them (see [`crate::members::Known`]).
     pub fn known(&self) -> crate::members::Known {
         let text = |v: &Option<String>| v.clone().filter(|s| !s.is_empty());
-        crate::members::Known { roles: self.roles.clone(), nick: text(&self.nick), avatar: text(&self.avatar) }
+        crate::members::Known {
+            roles: self.roles.clone(),
+            nick: text(&self.nick),
+            avatar: text(&self.avatar),
+            joined_at: self.joined_at.as_ref().and_then(|t| unix_rounded_up(&Value::String(t.clone()))),
+            guest: self.flags & crate::members::IS_GUEST != 0,
+            pending: self.pending,
+        }
     }
 }
 
@@ -1227,7 +1351,7 @@ impl Message {
 
     /// The message a thread was started from, which the thread's first
     /// message stands for (a `THREAD_STARTER_MESSAGE`), when Discord sent
-    /// it along. The client shows it in its place (`nZ` in 567008).
+    /// it along. The client shows it in its place (`nJ` in 812266).
     pub fn thread_starter(&self) -> Option<&Message> {
         match &self.referenced_message {
             Referenced::Message(original) if self.kind == Self::THREAD_STARTER => Some(original),
@@ -1244,12 +1368,61 @@ impl Message {
         self.message_reference.as_ref()?.channel_id
     }
 
+    /// Whether the client counts this message as blocked
+    /// (`isBlockedForMessage`, 994500), `blocked` saying whom we blocked:
+    /// its author, or for an app's answer who ran the command.
+    pub fn is_blocked_by(&self, blocked: impl Fn(Snowflake) -> bool) -> bool {
+        blocked(self.author.id) || self.interaction_metadata.as_ref().is_some_and(|i| blocked(i.user.id))
+    }
+
+    /// What a reply line shows for this message when it has no text to
+    /// show, in the client's wording and order (448368).
+    pub fn reply_placeholder(&self) -> &'static str {
+        if !self.sticker_items.is_empty() {
+            "Click to see sticker"
+        } else if self.interaction.is_some() {
+            "Click to see command"
+        } else {
+            "Click to see attachment"
+        }
+    }
+
     /// The id of the message this one replies to.
     pub fn reply_to(&self) -> Option<Snowflake> {
         if self.kind != Self::REPLY {
             return None;
         }
         self.message_reference.as_ref()?.message_id
+    }
+
+    /// Consecutive messages by one author within this window share a header.
+    const GROUP_WINDOW_SECS: i64 = 7 * 60;
+
+    /// Discord's message types for an app's answer to a slash command and
+    /// to a user or message command.
+    pub const CHAT_INPUT_COMMAND: u8 = 20;
+    pub const CONTEXT_MENU_COMMAND: u8 = 23;
+
+    /// An app's answer to a command (`isCommandType`, 383233).
+    pub fn is_command(&self) -> bool {
+        matches!(self.kind, Self::CHAT_INPUT_COMMAND | Self::CONTEXT_MENU_COMMAND)
+    }
+
+    /// Whether this message shares `previous`'s header (`u` in 857069): a
+    /// user message by the same author, under seven minutes before it and
+    /// on the same local day.
+    pub fn groups_under(&self, previous: Option<&Message>) -> bool {
+        let Some(previous) = previous.filter(|p| p.is_user_message()) else { return false };
+        // A reply always shows what it answers, and a command's answer who
+        // ran it, under a full header.
+        if previous.author.id != self.author.id || self.reply_to().is_some() || self.is_command() {
+            return false;
+        }
+        let local = |timestamp: &str| glib::DateTime::from_iso8601(timestamp, None).ok()?.to_local().ok();
+        match (local(&previous.timestamp), local(&self.timestamp)) {
+            (Some(a), Some(b)) => b.difference(&a).as_seconds() < Self::GROUP_WINDOW_SECS && a.ymd() == b.ymd(),
+            _ => false,
+        }
     }
 }
 
@@ -1432,7 +1605,16 @@ impl MessageEdit {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    #[test]
+    fn a_channel_kind_gives_back_its_number() {
+        for raw in 0..=u8::MAX {
+            assert_eq!(ChannelKind::from_raw(raw).raw(), raw);
+        }
+    }
 
     /// One of ours (5), changed by `extra`.
     fn ours(extra: Value) -> Message {
@@ -1458,6 +1640,16 @@ mod tests {
         assert!(!with(serde_json::json!({"bot": true, "discriminator": "0"})).non_user_bot());
         assert!(!with(serde_json::json!({"discriminator": "0000"})).non_user_bot());
         assert!(with(serde_json::json!({"system": true})).non_user_bot());
+    }
+
+    #[test]
+    fn tags_show_a_discriminator_only_when_it_counts() {
+        let user = |json: Value| serde_json::from_value::<User>(json).unwrap();
+        assert_eq!(user(serde_json::json!({"id": "1", "username": "pat", "discriminator": "1234"})).tag(), "pat#1234");
+        assert_eq!(user(serde_json::json!({"id": "1", "username": "pat", "discriminator": "0"})).tag(), "pat");
+        assert_eq!(user(serde_json::json!({"id": "1", "username": "hook", "discriminator": "0000"})).tag(), "hook");
+        assert_eq!(user(serde_json::json!({"id": "1", "username": "pat"})).tag(), "pat");
+        assert_eq!(user(serde_json::json!({"id": "1", "username": "", "discriminator": "1234"})).tag(), "???");
     }
 
     #[test]
@@ -1528,6 +1720,70 @@ mod tests {
         assert!(!answer(json!({"1": "5"})).is_deletable_by(them, false), "someone else's command");
         assert!(!answer(json!({"0": "1"})).is_deletable_by(me, false), "installed to the server");
         assert!(!answer(json!({"0": "1", "1": "5"})).is_deletable_by(me, false), "to both");
+    }
+
+    #[test]
+    fn a_command_answer_starts_its_own_group() {
+        let at = |id: &str, kind: u8, time: &str| {
+            ours(json!({"id": id, "type": kind, "author": {"id": "7", "username": "app"}, "timestamp": time}))
+        };
+        // Noon UTC is the same local day anywhere.
+        let first = at("3", 0, "2024-05-01T12:00:00+00:00");
+        assert!(at("4", 0, "2024-05-01T12:01:00+00:00").groups_under(Some(&first)));
+        for kind in [20, 23] {
+            assert!(!at("4", kind, "2024-05-01T12:01:00+00:00").groups_under(Some(&first)), "type {kind}");
+        }
+    }
+
+    #[test]
+    fn a_reply_to_an_app_answer_asks_to_see_the_command() {
+        let interaction = json!({"id": "8", "type": 2, "name": "roll", "user": {"id": "5", "username": "me"}});
+        let embed = json!([{"title": "a roll"}]);
+        let answer = ours(json!({"type": 20, "content": "", "embeds": embed, "interaction": interaction}));
+        assert_eq!(answer.reply_placeholder(), "Click to see command");
+        let sticker = json!([{"id": "4", "name": "wave", "format_type": 1}]);
+        let with_sticker =
+            ours(json!({"type": 20, "content": "", "interaction": interaction, "sticker_items": sticker}));
+        assert_eq!(with_sticker.reply_placeholder(), "Click to see sticker", "a sticker comes first");
+        assert_eq!(ours(json!({"content": "", "embeds": embed})).reply_placeholder(), "Click to see attachment");
+    }
+
+    #[test]
+    fn an_answer_to_a_blocked_users_command_counts_as_blocked() {
+        let blocked = |id: Snowflake| id == Snowflake(6);
+        let metadata = |user: &str| json!({"id": "8", "type": 2, "user": {"id": user, "username": "someone"}});
+        let answer = |user: &str| {
+            ours(json!({"type": 20, "author": {"id": "7", "username": "app"}, "interaction_metadata": metadata(user)}))
+        };
+        assert!(answer("6").is_blocked_by(blocked), "a bot's answer to a blocked user's command");
+        assert!(!answer("5").is_blocked_by(blocked));
+        assert!(ours(json!({"author": {"id": "6", "username": "them"}})).is_blocked_by(blocked));
+        assert!(!ours(json!({})).is_blocked_by(blocked));
+    }
+
+    #[test]
+    fn an_app_answer_reads_the_command_it_answers() {
+        let me = json!({"id": "5", "username": "me"});
+        let interaction = json!({"id": "8", "type": 2, "name": "settings set", "user": me});
+        let metadata = json!({"id": "8", "type": 5, "user": me, "triggering_interaction_metadata":
+            {"id": "9", "type": 2, "user": me, "command_type": 2, "target_user": {"id": "6", "username": "them"}}});
+        let answer = ours(json!({"type": 20, "interaction": interaction, "interaction_metadata": metadata,
+                                 "activity_instance": {"id": "a1"}}));
+        let ran = answer.interaction.as_ref().unwrap();
+        assert_eq!((ran.kind, ran.display_name(), ran.user.id), (2, "settings set", Snowflake(5)));
+        let metadata = answer.interaction_metadata.as_ref().unwrap();
+        let triggering = metadata.triggering_interaction_metadata.as_deref().unwrap();
+        assert_eq!((metadata.kind, metadata.command_type, metadata.target_user.as_ref()), (5, None, None));
+        assert_eq!((triggering.kind, triggering.command_type), (2, Some(2)));
+        assert_eq!(triggering.target_user.as_ref().map(|u| u.id), Some(Snowflake(6)));
+        assert!(answer.activity_instance.is_some());
+
+        let localized = json!({"name": "roll", "name_localized": "würfeln", "user": me});
+        assert_eq!(ours(json!({"interaction": localized})).interaction.unwrap().display_name(), "würfeln");
+        let emptied = json!({"name": "roll", "name_localized": "", "user": me});
+        assert_eq!(ours(json!({"interaction": emptied})).interaction.unwrap().display_name(), "", "?? keeps it");
+        let plain = ours(json!({}));
+        assert!(plain.interaction.is_none() && plain.activity_instance.is_none());
     }
 
     #[test]
@@ -1658,6 +1914,40 @@ mod tests {
             serde_json::from_str(r#"{"id":"2","properties":{"name":"New","icon":"abc","owner_id":"7"},"channels":[]}"#)
                 .unwrap();
         assert_eq!((g.name.as_str(), g.icon.as_deref(), g.owner_id), ("New", Some("abc"), Some(Snowflake(7))));
+    }
+
+    #[test]
+    fn content_levels_in_either_guild_shape() {
+        let nested: Guild = serde_json::from_str(
+            r#"{"id":"2","properties":{"name":"N","nsfw_level":3,"owner_configured_content_level":1},"channels":[]}"#,
+        )
+        .unwrap();
+        let flat: Guild =
+            serde_json::from_str(r#"{"id":"2","name":"N","nsfw_level":3,"owner_configured_content_level":1}"#).unwrap();
+        for g in [&nested, &flat] {
+            assert_eq!((g.nsfw_level, g.owner_configured_content_level), (3, 1));
+        }
+        let none: Guild =
+            serde_json::from_str(r#"{"id":"2","name":"N","owner_configured_content_level":null}"#).unwrap();
+        assert_eq!((none.nsfw_level, none.owner_configured_content_level), (0, 0), "DEFAULT");
+        let mut kept = nested;
+        kept.update(none);
+        assert_eq!((kept.nsfw_level, kept.owner_configured_content_level), (0, 0), "GUILD_UPDATE replaces them");
+    }
+
+    #[test]
+    fn a_server_is_age_restricted_when_explicit_or_age_restricted() {
+        let guild = |level: u8, owner: u8| {
+            let mut g: Guild = serde_json::from_str(r#"{"id":"2","name":"N"}"#).unwrap();
+            (g.nsfw_level, g.owner_configured_content_level) = (level, owner);
+            g
+        };
+        for (level, restricted) in [(0, false), (1, true), (2, false), (3, true)] {
+            assert_eq!(guild(level, 0).age_restricted(true), restricted, "nsfw_level {level}");
+            assert_eq!(guild(0, level).age_restricted(false), restricted, "owner's level {level}");
+        }
+        assert!(!guild(3, 0).age_restricted(false), "outside the experiment the owner's level decides");
+        assert!(!guild(0, 3).age_restricted(true), "inside it Discord's");
     }
 
     #[test]

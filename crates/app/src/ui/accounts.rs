@@ -1,7 +1,7 @@
 //! The accounts on this device, as the official client's switcher has them:
-//! the account menu's Switch Accounts submenu (998034), the Manage Accounts
+//! the account menu's Switch Accounts submenu (166783), the Manage Accounts
 //! dialog (623161, 970573) and the list the login page shows while accounts
-//! are stored but none is logged in (275941).
+//! are stored but none is logged in (341010).
 //!
 //! Like the client, one account is connected at a time: switching closes the
 //! shown account's gateway, forgets what the window held of it, and connects
@@ -136,7 +136,7 @@ impl App {
     }
 
     /// The page of stored accounts, for when none is logged in. The client
-    /// asks "Choose an account" and offers to add one (275941).
+    /// asks "Choose an account" and offers to add one (341010).
     pub(super) fn build_choose_account(self: &Rc<Self>) -> gtk::Widget {
         let column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -436,7 +436,7 @@ impl App {
     }
 
     /// The submenu of the account menu: the accounts, ticking the shown one,
-    /// then Manage Accounts (998034).
+    /// then Manage Accounts (166783).
     pub(super) fn switch_menu(&self) -> gio::Menu {
         let submenu = gio::Menu::new();
         submenu.append_section(None, &self.switch_items);

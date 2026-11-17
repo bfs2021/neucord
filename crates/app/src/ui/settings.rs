@@ -284,6 +284,23 @@ impl App {
             &config::TRANSLUCENT,
             |app, on| app.theme.set_translucent(on),
         );
+        let chat_box = group("Chat box", "");
+        option_switch(self, &chat_box, "Show send message button", "", &config::SEND_BUTTON, |app, _| {
+            app.refresh_chat_bar()
+        });
+        // The client's advanced chat bar settings (`tP` in 212909), only for
+        // the accounts whose bar follows them; with no expression picker
+        // format, Neucord's is always Flexible, which shows all three.
+        if self.chat_bar_customizable() {
+            for (title, key) in [
+                ("Show apps button", &config::APPS_BUTTON),
+                ("Show emoji button", &config::EMOJI_BUTTON),
+                ("Show GIF button", &config::GIF_BUTTON),
+                ("Show sticker button", &config::STICKER_BUTTON),
+            ] {
+                option_switch(self, &chat_box, title, "", key, |app, _| app.refresh_chat_bar());
+            }
+        }
         let background = group("Background", "");
         option_switch(
             self,
@@ -310,7 +327,7 @@ impl App {
             &config::UNREAD_BADGE,
             |app, _| app.refresh_tray(),
         );
-        let neucord = page("Neucord", "preferences-system-symbolic", &[&appearance, &typing, &background]);
+        let neucord = page("Neucord", "preferences-system-symbolic", &[&appearance, &chat_box, &typing, &background]);
         neucord.set_description("These are saved on this computer only, not to your Discord account.");
 
         let dialog = adw::PreferencesDialog::builder().title("Settings").build();

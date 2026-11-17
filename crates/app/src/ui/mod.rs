@@ -5,12 +5,15 @@ mod account;
 mod accounts;
 mod attachments;
 mod background;
+mod builtins;
 mod captcha;
 mod chat;
+mod command_files;
 mod components;
 mod composer;
 mod connection;
 mod create_thread;
+mod dice;
 mod edits;
 mod embeds;
 mod emoji;
@@ -20,16 +23,21 @@ mod forum_post;
 mod friends;
 mod gifs;
 mod identity;
+mod integrations;
+mod launcher;
 mod login;
 mod media_frame;
+mod member_check;
 mod members;
 mod menus;
 mod message_row;
+mod modal;
 mod notify;
 mod notify_menus;
 mod own_status;
 mod panes;
 mod picker;
+mod pills;
 mod poll_composer;
 mod polls;
 mod privacy;
@@ -44,6 +52,7 @@ mod server_privacy;
 mod settings;
 mod sidebar;
 mod slash;
+mod spelling;
 mod state;
 mod stickers;
 mod switcher;
@@ -130,12 +139,25 @@ pub struct App {
     manage: RefCell<Option<(adw::Dialog, gtk::Label)>>,
     list: gtk::ListView,
     scroller: gtk::ScrolledWindow,
-    composer: gtk::TextView,
+    composer: sourceview::View,
+    /// Spellcheck over the composer's buffer.
+    spelling: libspelling::TextBufferAdapter,
     composer_box: gtk::Box,
     /// Opens the emoji picker.
     emoji_button: gtk::Button,
+    /// Opens the app launcher.
+    apps_button: gtk::Button,
+    launcher: launcher::Slot,
+    /// Sends what Enter sends, where the user chose to have it.
+    send_button: gtk::Button,
+    /// Between the expression buttons and the send button, which it follows.
+    send_separator: gtk::Separator,
     /// Opens the GIF picker.
     gif_button: gtk::Button,
+    /// Ends the GIF button's pulse after a favourite.
+    gif_pulse: RefCell<Option<glib::SourceId>>,
+    /// "Added to Favorites", over the GIF button while it pulses.
+    gif_hint: gtk::Popover,
     /// Opens the sticker picker, and the sticker waiting for the message.
     sticker_button: gtk::Button,
     waiting: stickers::Waiting,
@@ -158,6 +180,8 @@ pub struct App {
     thread_expiry: RefCell<Option<glib::SourceId>>,
     /// Saves the folds no request carried, fifteen seconds after the last.
     fold_save: RefCell<Option<glib::SourceId>>,
+    /// Apps' forms open on the window.
+    modal_forms: RefCell<Vec<Rc<modal::Form>>>,
     /// Threads we started and are waiting for the gateway to bring.
     thread_waiters: RefCell<Vec<(Snowflake, async_channel::Sender<()>)>>,
     /// The post list a forum or media channel shows.
@@ -172,6 +196,8 @@ pub struct App {
     /// The token being completed (char offset of its start) and the
     /// candidates shown, row-aligned.
     mention: RefCell<composer::MentionCtx>,
+    /// `/gif`'s and `/sticker`'s results, over the box.
+    integration: integrations::View,
     /// "Replying to …" above the composer, with the ping toggle.
     reply_bar: gtk::Box,
     reply_label: gtk::Label,
@@ -182,6 +208,8 @@ pub struct App {
     drafts: uploads::Drafts,
     /// When the messages being written go out, if they are scheduled.
     scheduling: scheduling::Scheduling,
+    /// A roll of the dice above the message box, while there is one.
+    dice: dice::DiceBar,
     /// Says how a request went, for the ones with nothing else to show it.
     toasts: adw::ToastOverlay,
     /// Shows the pictures and videos of messages over the window.
@@ -294,6 +322,7 @@ impl App {
         let selection = gtk::NoSelection::new(Some(blank.clone()));
         let config = Rc::new(Store::open(config::config_path()));
         let remembered = Rc::new(Store::open(config::state_path()));
+        let (composer, spelling) = spelling::composer(&config);
         let this = Rc::new(App {
             window,
             medium,
@@ -336,13 +365,8 @@ impl App {
             switch_items: gio::Menu::new(),
             manage: RefCell::default(),
             scroller: gtk::ScrolledWindow::builder().vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build(),
-            composer: gtk::TextView::builder()
-                .wrap_mode(gtk::WrapMode::WordChar)
-                .accepts_tab(false)
-                .hexpand(true)
-                .valign(gtk::Align::Center)
-                .css_classes(["composer-input"])
-                .build(),
+            composer,
+            spelling,
             composer_box: gtk::Box::builder().css_classes(["composer", "card-row"]).build(),
             emoji_button: gtk::Button::builder()
                 .icon_name("face-smile-symbolic")
@@ -350,11 +374,37 @@ impl App {
                 .valign(gtk::Align::Center)
                 .css_classes(["flat", "circular"])
                 .build(),
+            apps_button: gtk::Button::builder()
+                .icon_name("view-app-grid-symbolic")
+                .tooltip_text("Apps")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat", "circular"])
+                .build(),
+            launcher: launcher::Slot::default(),
+            send_button: gtk::Button::builder()
+                .icon_name("mail-send-symbolic")
+                .tooltip_text("Send Message")
+                .valign(gtk::Align::Center)
+                .visible(false)
+                .css_classes(["flat", "circular"])
+                .build(),
+            send_separator: gtk::Separator::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .margin_top(8)
+                .margin_bottom(8)
+                .visible(false)
+                .build(),
             gif_button: gtk::Button::builder()
                 .label("GIF")
                 .tooltip_text("Find a GIF")
                 .valign(gtk::Align::Center)
                 .css_classes(["flat"])
+                .build(),
+            gif_pulse: RefCell::default(),
+            gif_hint: gtk::Popover::builder()
+                .autohide(false)
+                .position(gtk::PositionType::Top)
+                .child(&gtk::Label::new(Some("Added to Favorites")))
                 .build(),
             sticker_button: gtk::Button::builder()
                 .icon_name("image-x-generic-symbolic")
@@ -381,6 +431,7 @@ impl App {
             timeout_end: RefCell::default(),
             thread_expiry: RefCell::default(),
             fold_save: RefCell::default(),
+            modal_forms: RefCell::default(),
             thread_waiters: RefCell::default(),
             forum: forum::Page::new(),
             post_form: RefCell::default(),
@@ -398,6 +449,7 @@ impl App {
                 .build(),
             mention_list: gtk::ListBox::builder().css_classes(["navigation-sidebar"]).build(),
             mention: RefCell::default(),
+            integration: integrations::View::new(),
             reply_bar: gtk::Box::builder().spacing(8).visible(false).css_classes(["reply-bar"]).build(),
             reply_label: gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(pango::EllipsizeMode::End).build(),
             reply_ping: gtk::ToggleButton::builder()
@@ -409,6 +461,7 @@ impl App {
             reply: RefCell::default(),
             drafts: uploads::Drafts::new(),
             scheduling: scheduling::Scheduling::new(),
+            dice: dice::DiceBar::new(),
             toasts: adw::ToastOverlay::new(),
             viewer: viewer::Viewer::new(),
             voice: voice::Voice::new(),
@@ -477,6 +530,7 @@ impl App {
         // the window is open. Released on close, which breaks the cycle.
         let keep_alive = RefCell::new(Some(this.clone()));
         let popover = this.mention_popover.clone();
+        let gif_hint = this.gif_hint.clone();
         this.window.connect_close_request(move |window| {
             if keep_alive.borrow().as_ref().is_some_and(|app| app.keeps_running()) {
                 window.set_visible(false);
@@ -484,6 +538,7 @@ impl App {
             }
             // A manually-parented popover must be unparented before teardown.
             popover.unparent();
+            gif_hint.unparent();
             keep_alive.take();
             glib::Propagation::Proceed
         });
