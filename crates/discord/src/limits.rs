@@ -5,7 +5,8 @@
 //!
 //! Nitro is read from our user, in READY and USER_UPDATE. Most of it is
 //! perks: the client asks the `perks` bitmask when Discord sends one, and
-//! falls back to what the `premium_type` includes (722178's `R`). Upload
+//! falls back to what the `premium_type` includes (`R` in the client's
+//! `ProductCatalog.tsx` module, watched as `premium perks`). Upload
 //! sizes go by `premium_type` alone (`getUserMaxFileSize`).
 
 use serde_json::Value;

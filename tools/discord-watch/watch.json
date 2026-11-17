@@ -223,18 +223,12 @@
     "canDeleteOwnMessage",
     "canSaveImage",
     "canRetry",
-    "canStreamQuality",
     "canTrackUnreads",
     "changeNickname",
     "checkTotalAttachmentSize",
     "closePrivateChannel",
     "compressAndCheckFileSize",
     "convertFileToJpeg",
-    "canUseAnimatedAvatar",
-    "canUseAnimatedEmojis",
-    "canUseCustomStickersEverywhere",
-    "canUseEmojisEverywhere",
-    "canUseIncreasedMessageLength",
     "createAttachmentUrlRetryOpts",
     "createPoll",
     "createResponseHandler",
@@ -469,7 +463,8 @@
     "interaction components": ["FileUploadActionComponent requires modalCustomId from context"],
     "component validators": ["missing validator for this component"],
     "component transform": ["transformComponent: Unknown component type"],
-    "command file field": ["previousUploadOptions"]
+    "command file field": ["previousUploadOptions"],
+    "premium perks": ["ProductCatalog.tsx"]
   },
   "constants": ["ACCOUNT_AGE", "FONT_SIZES", "MEMBER_AGE", "POLLS", "REPLYABLE", "UNDELETABLE", "USER_MESSAGE", "bannerHeight", "bannerWidth"],
   "protos": [
